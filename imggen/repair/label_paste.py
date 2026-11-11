@@ -178,6 +178,27 @@ def _occluders(warped, gen, mask, thr=40, min_blob_frac=0.0012):
     return cv2.dilate(out, np.ones((7, 7), np.uint8))
 
 
+def _paste_surface(src_bgr, smask, region, s, gen_bgr, out):
+    """Warp one source region onto the output; returns (out, region actually pasted in source coords)."""
+    gh, gw = gen_bgr.shape[:2]
+    sh, sw = smask.shape
+    warped = cv2.warpPerspective(src_bgr, s.H, (gw, gh), flags=cv2.INTER_CUBIC)
+    wmask = cv2.warpPerspective(region, s.H, (gw, gh), flags=cv2.INTER_LINEAR)
+    wmask = cv2.erode(wmask, np.ones((3, 3), np.uint8))
+    warped = _match_colour(warped, gen_bgr, wmask)
+    hull_src = np.zeros_like(smask)
+    cv2.fillConvexPoly(hull_src, s.src_poly, 255)
+    hull_src = cv2.dilate(hull_src, np.ones((25, 25), np.uint8))
+    hull_gen = cv2.warpPerspective(hull_src, s.H, (gw, gh))
+    wmask = _agreement(warped, gen_bgr, wmask, hull_gen)
+    wmask = cv2.bitwise_and(wmask, cv2.bitwise_not(_occluders(warped, gen_bgr, wmask)))
+    done = cv2.warpPerspective(wmask, np.linalg.inv(s.H), (sw, sh))
+    done = (done > 127).astype(np.uint8) * 255
+    feather = cv2.GaussianBlur(wmask, (0, 0), 2).astype(np.float32)[..., None] / 255.0
+    out = (warped * feather + out * (1 - feather)).astype(np.uint8)
+    return out, done
+
+
 def paste_label(src_bgr: np.ndarray, gen_bgr: np.ndarray, max_err: float = 3.5,
                 min_coverage: float = 0.35) -> PasteResult:
     gh, gw = gen_bgr.shape[:2]
@@ -208,23 +229,47 @@ def paste_label(src_bgr: np.ndarray, gen_bgr: np.ndarray, max_err: float = 3.5,
         region = ((owner == i) & near & (smask > 0)).astype(np.uint8) * 255
         if region.sum() == 0:
             continue
-        warped = cv2.warpPerspective(src_bgr, s.H, (gw, gh), flags=cv2.INTER_CUBIC)
-        wmask = cv2.warpPerspective(region, s.H, (gw, gh), flags=cv2.INTER_LINEAR)
-        wmask = cv2.erode(wmask, np.ones((3, 3), np.uint8))
-        warped = _match_colour(warped, gen_bgr, wmask)
-        hull_src = np.zeros_like(smask)
-        cv2.fillConvexPoly(hull_src, s.src_poly, 255)
-        hull_src = cv2.dilate(hull_src, np.ones((25, 25), np.uint8))
-        hull_gen = cv2.warpPerspective(hull_src, s.H, (gw, gh))
-        wmask = _agreement(warped, gen_bgr, wmask, hull_gen)
-        wmask = cv2.bitwise_and(wmask, cv2.bitwise_not(_occluders(warped, gen_bgr, wmask)))
-        pasted_px = float((wmask > 127).sum())
-        region = cv2.warpPerspective(wmask, np.linalg.inv(s.H), (sw, sh))  # what was really pasted, in source coords
-        region = (region > 127).astype(np.uint8) * 255
-        feather = cv2.GaussianBlur(wmask, (0, 0), 2).astype(np.float32)[..., None] / 255.0
-        out = (warped * feather + out * (1 - feather)).astype(np.uint8)
-        pasted_src |= region
-        used.append(s)
+        out, done = _paste_surface(src_bgr, smask, region, s, gen_bgr, out)
+        if done.sum():
+            pasted_src |= done
+            used.append(s)
+
+    # Second pass: parts of the product that found no surface (typically a small,
+    # tilted bottle held in a hand). Match each leftover part on its own against an
+    # upscaled generated image, where its features are big enough to find.
+    left = smask & ~cv2.dilate(pasted_src, np.ones((15, 15), np.uint8))
+    n, lab, st, _ = cv2.connectedComponentsWithStats(left)
+    up = 2.0
+    gen_up = None
+    for k in range(1, n):
+        if st[k, cv2.CC_STAT_AREA] < 0.08 * smask.sum() / 255:
+            continue
+        x, y, w, h = st[k, :4]
+        m = 20
+        x0, y0 = max(0, x - m), max(0, y - m)
+        x1, y1 = min(sw, x + w + m), min(sh, y + h + m)
+        comp = (lab == k).astype(np.uint8) * 255
+        crop, cmask = src_bgr[y0:y1, x0:x1], comp[y0:y1, x0:x1]
+        if gen_up is None:
+            gen_up = cv2.resize(gen_bgr, None, fx=up, fy=up, interpolation=cv2.INTER_CUBIC)
+        cands = find_surfaces(crop, cmask, gen_up, max_surfaces=1, min_inliers=20)
+        if not cands or cands[0].reproj_err > max_err * up:
+            continue
+        c = cands[0]
+        T = np.array([[1, 0, -x0], [0, 1, -y0], [0, 0, 1]], np.float64)
+        S = np.array([[1 / up, 0, 0], [0, 1 / up, 0], [0, 0, 1]], np.float64)
+        H = S @ c.H @ T
+        if not _sane(H, src_bgr.shape, gen_bgr.shape):
+            continue
+        poly = (c.src_poly.reshape(-1, 2) + [x0, y0]).astype(np.int32).reshape(-1, 1, 2)
+        s2 = Surface(H=H, src_poly=poly, inliers=c.inliers, reproj_err=c.reproj_err / up)
+        hull = np.zeros_like(smask)
+        cv2.fillConvexPoly(hull, poly, 255)
+        reg = comp & cv2.dilate(hull, np.ones((31, 31), np.uint8))   # only around what really matched
+        out, done = _paste_surface(src_bgr, smask, reg, s2, gen_bgr, out)
+        if done.sum():
+            pasted_src |= done
+            used.append(s2)
     cov = float(pasted_src.sum()) / max(float(smask.sum()), 1.0)
     ok = bool(used) and cov >= min_coverage
     reason = "" if ok else ("low coverage %.2f" % cov if used else "surfaces failed error check")
