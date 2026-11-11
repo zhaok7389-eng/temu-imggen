@@ -1,0 +1,13 @@
+# secrets
+.env
+*.key
+# python
+__pycache__/
+*.pyc
+.venv/
+# product images and generated output stay local, never in git
+workspace/skus/
+workspace/exports/
+workspace/app.db
+workspace/ledger.csv
+*.zip
