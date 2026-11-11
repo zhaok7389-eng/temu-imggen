@@ -1,0 +1,4 @@
+# Optional: local OCR for gross label-text checks (missing lines, garbled text).
+# rapidocr-onnxruntime only supports Python <= 3.12. Skip this file on Python 3.13+;
+# the main text check uses the OpenAI vision model instead.
+rapidocr-onnxruntime>=1.3

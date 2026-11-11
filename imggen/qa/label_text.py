@@ -7,8 +7,19 @@ import numpy as np
 
 @lru_cache(maxsize=1)
 def _engine():
-    from rapidocr_onnxruntime import RapidOCR
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+    except ImportError as e:  # optional dependency, see requirements-ocr.txt
+        raise RuntimeError("本地 OCR 未安装（可选）：pip install -r requirements-ocr.txt，需要 Python 3.12 或更低") from e
     return RapidOCR()
+
+
+def available() -> bool:
+    try:
+        import rapidocr_onnxruntime  # noqa: F401
+        return True
+    except ImportError:
+        return False
 
 
 def ocr_lines(bgr: np.ndarray, upscale: float = 2.0):

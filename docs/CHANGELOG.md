@@ -1,5 +1,10 @@
 # 进度记录
 
+## 2026-11-11 · 依赖调整
+
+- Mac 上 Python 3.14 装不了 rapidocr-onnxruntime（最高只支持 3.12）。本地 OCR 改成可选（requirements-ocr.txt），主依赖不再包含它。
+- 回贴、生成、记账、审核页都不依赖它；文字核对主路线改用 OpenAI 视觉模型。
+
 ## 2026-11-11 · v0.3 生成调用与记账（未联调）
 
 - `imggen/gen/generate.py`：调用 images/edits；遇到 429/5xx 按 1、2、4、8 秒退避，最多重试 4 次；内容审核拦截不重试；每日预算到上限就停。
