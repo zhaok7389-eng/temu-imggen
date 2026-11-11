@@ -1,13 +1,12 @@
 # secrets
 .env
 *.key
+config.yaml
 # python
 __pycache__/
 *.pyc
 .venv/
-# product images and generated output stay local, never in git
-workspace/skus/
-workspace/exports/
-workspace/app.db
-workspace/ledger.csv
+.pytest_cache/
+# all product images, generated output and run data stay local, never in git
+workspace/
 *.zip
