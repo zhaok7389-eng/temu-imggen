@@ -15,7 +15,7 @@ cd temu-imggen
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python -m pytest -q tests        # 看到 "2 passed" 说明环境没问题
+python -m pytest -q tests        # 看到 "4 passed" 说明环境没问题
 ```
 
 以后每次更新：
