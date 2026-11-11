@@ -161,7 +161,7 @@ def _agreement(warped, gen, mask, hull_mask, block=24, min_ncc=0.25, flat_std=6.
     return keep & mask
 
 
-def _occluders(warped, gen, mask, thr=45, min_blob_frac=0.004):
+def _occluders(warped, gen, mask, thr=40, min_blob_frac=0.0012):
     """Large solid regions where the generated image differs a lot from the pasted label
     (a thumb over the bottle, a dropper, a leaf). Thin text strokes are removed by the
     morphological opening, so text differences are still replaced."""
