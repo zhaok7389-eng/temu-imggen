@@ -10,12 +10,28 @@ Temu 美区美妆主图批量生成工具（私有）。需求见 `docs/DEV_REQU
 
 - 第一次：会自动安装需要的东西（Python 3.12、依赖、本地 OCR），大约 3–5 分钟；然后弹窗让你粘贴一次
   OpenAI API key，key 只存进 Mac 的钥匙串，以后不再问。没有 key 就点「先不用」，在设置里开演示模式先熟悉流程。
-- 以后：双击后几秒，浏览器自动打开工具；每次还会自动拿最新代码。
+- 以后：双击后几秒，浏览器自动打开工具；每次还会自动下载最新版（见下面「自动更新」）。
 - 弹出的终端窗口别关，**关掉窗口 = 关掉工具**。
 - 如果双击后提示「无法打开，来自身份不明的开发者」：右键这个文件 → 打开 → 再点打开（只需一次）。
 - 换 key：打开「钥匙串访问」，搜 `temu-imggen`，删掉那一条，下次双击会重新问。
 
 出错时，终端窗口会停住并显示原因，截图发给 Claude。
+
+### 自动更新（设置一次）
+
+双击启动时会用一个 GitHub 令牌检查并下载最新版。只替换代码，`workspace/`（产品、出的图、账本）和设置不会动。
+
+生成令牌（只读、只能读这一个仓库）：
+
+1. 登录 GitHub（zhaok7389-eng 账号），打开 https://github.com/settings/personal-access-tokens/new
+2. Token name 填 `temu-imggen`；Expiration 选最长的。
+3. Repository access 选 **Only select repositories**，选 `temu-imggen`。
+4. Permissions → Repository permissions → **Contents** 选 **Read-only**（其他都不用动）。
+5. 点 Generate token，复制 `github_pat_` 开头的那串。
+6. 双击启动时弹窗「自动更新」，粘贴进去点保存。以后不再问。
+
+之前点过「先不用」、现在想设置：删掉文件夹里的 `.no-auto-update` 文件（访达里按 ⌘⇧. 显示隐藏文件），再双击启动。
+令牌过期或想换：打开「钥匙串访问」搜 `temu-imggen`，删掉 GITHUB_TOKEN 那条，下次双击会重新问。
 
 ## 流程
 
