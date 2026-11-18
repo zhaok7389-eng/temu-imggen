@@ -112,3 +112,28 @@ def test_copy_rules():
     lab2 = dict(lab, allowed_claims=["Reduces 90% Wrinkles", "Cures Acne", "Clinically Proven"])
     assert any("数字" in x for x in check_text("Reduces 90% Wrinkles", lab2, banned, "bullet"))
     assert any("禁用词" in x for x in check_text("Clinically Proven", lab2, banned, "bullet"))
+
+
+def test_upload_grouping(tmp_path):
+    """Folder pick/drop: each folder = one product named after it; loose images: one or each."""
+    cfg = load_config()
+    cfg.update(demo_mode=True, workspace=str(tmp_path / "ws"))
+    app = create_app(cfg)
+    c = TestClient(app)
+    png = _product_png()
+    files = [("files", ("a.png", png, "image/png")), ("files", ("b.png", png, "image/png")),
+             ("files", ("c.png", png, "image/png")), ("files", (".DS_Store", b"x", "image/png"))]
+    paths = ["产品图片/03 INKEEY 胶原面霜/a.png", "产品图片/03 INKEEY 胶原面霜/b.png",
+             "产品图片/04 淡斑面霜/c.png", "产品图片/.DS_Store"]
+    r = c.post("/upload", data={"paths": paths, "mode": "one"}, files=files).json()
+    st = app.state.core.store
+    names = sorted(st.sku(s)["name"] for s in st.list_skus())
+    assert names == ["03 INKEEY 胶原面霜", "04 淡斑面霜"], (names, r)
+    big = [s for s in st.list_skus() if st.sku(s)["name"].startswith("03")][0]
+    assert len(st.sources(big)) == 2
+    r = c.post("/upload", data={"paths": ["x.png", "y.png"], "mode": "each"},
+               files=[("files", ("x.png", png, "image/png")), ("files", ("y.png", png, "image/png"))]).json()
+    assert len(st.list_skus()) == 4
+    r = c.post("/upload", data={"paths": ["p.png", "q.png"], "mode": "one"},
+               files=[("files", ("p.png", png, "image/png")), ("files", ("q.png", png, "image/png"))]).json()
+    assert "/sku/" in r["go"] and len(st.list_skus()) == 5

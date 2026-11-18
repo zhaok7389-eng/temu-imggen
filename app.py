@@ -56,10 +56,13 @@ button.p,.btn.p{background:var(--acc);border-color:var(--acc);color:#fff}button:
 #modal .imgs{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}#modal img{max-height:88vh;max-width:32vw;background:#fff}
 #modal .cap{color:#fff;text-align:center;margin-bottom:8px}
 #jobs .j{font-size:13px;margin:2px 0}
+.drop{border:2px dashed #b9c3d3;border-radius:12px;padding:28px;text-align:center;background:#fafbfd}
+.drop.over{border-color:var(--acc);background:#eef4ff}
+#pick{margin-top:14px}#pick .sum{background:#f6f7f9;border-radius:8px;padding:12px}
 @media (max-width:700px){.cols2{grid-template-columns:1fr}#modal img{max-width:92vw}}
 """
 
-JS = """
+JS = r"""
 function post(url, data){return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data||{})}).then(r=>r.json())}
 function pollJobs(sku){
   const box=document.getElementById('jobs'); if(!box) return;
@@ -87,6 +90,49 @@ function act(el, action){
     location.reload();
   });
 }
+/* ---- import: drag & drop files or folders ---- */
+let picked=[];
+async function walk(entry, path, out){
+  if(entry.isFile){await new Promise(r=>entry.file(f=>{out.push([f,path+f.name]);r()},()=>r()));}
+  else if(entry.isDirectory){const rd=entry.createReader();let b;
+    do{b=await new Promise(r=>rd.readEntries(r,()=>r([])));for(const e of b)await walk(e,path+entry.name+'/',out)}while(b.length)}
+}
+function setPicked(list){
+  picked=list.filter(([f,p])=>/\.(jpe?g|png|webp)$/i.test(f.name)&&!p.split('/').some(x=>x.startsWith('.')));
+  const box=document.getElementById('pick');
+  if(!picked.length){box.innerHTML='<div class="sum err">没有找到图片（支持 jpg / png / webp）</div>';return}
+  const groups={};let loose=0;
+  for(const [f,p] of picked){const s=p.split('/');if(s.length>1){const g=s[s.length-2];groups[g]=(groups[g]||0)+1}else loose++}
+  const names=Object.keys(groups);
+  let h='<div class="sum">';
+  if(names.length)h+=`<p><b>${names.length} 个文件夹 → ${names.length} 个产品：</b>${names.map(n=>n+'（'+groups[n]+' 张）').join('、')}</p>`;
+  if(loose)h+=`<p><b>${loose} 张散图：</b>
+    <label><input type="radio" name="mode" value="one" checked> 是同一个产品的几张图（不同角度/颜色）</label>
+    <label style="margin-left:14px"><input type="radio" name="mode" value="each"> 每张图是一个产品</label></p>`;
+  h+='<button class="p" id="go" onclick="doUpload()">开始导入</button> <button onclick="setPickedClear()">取消</button></div>';
+  box.innerHTML=h;
+}
+function setPickedClear(){picked=[];document.getElementById('pick').innerHTML=''}
+async function doUpload(){
+  const fd=new FormData();
+  const b=document.getElementById('go');b.disabled=true;b.textContent='上传中…';
+  for(const [f,p] of picked){fd.append('files',new Blob([await f.arrayBuffer()],{type:f.type||'image/jpeg'}),f.name);fd.append('paths',p)}
+  const m=document.querySelector('input[name=mode]:checked');fd.append('mode',m?m.value:'one');
+  const r=await fetch('/upload',{method:'POST',body:fd});const j=await r.json();
+  if(j.error){alert(j.error);b.disabled=false;b.textContent='开始导入';return}
+  location.href=j.go;
+}
+document.addEventListener('DOMContentLoaded',()=>{
+  const d=document.getElementById('drop');if(!d)return;
+  d.addEventListener('dragover',e=>{e.preventDefault();d.classList.add('over')});
+  d.addEventListener('dragleave',()=>d.classList.remove('over'));
+  d.addEventListener('drop',async e=>{e.preventDefault();d.classList.remove('over');
+    const out=[];const items=[...(e.dataTransfer.items||[])].map(i=>i.webkitGetAsEntry&&i.webkitGetAsEntry()).filter(Boolean);
+    if(items.length){for(const it of items)await walk(it,'',out)}else{for(const f of e.dataTransfer.files)out.push([f,f.name])}
+    setPicked(out)});
+  document.getElementById('pickFiles').onchange=e=>setPicked([...e.target.files].map(f=>[f,f.name]));
+  document.getElementById('pickDir').onchange=e=>setPicked([...e.target.files].map(f=>[f,f.webkitRelativePath||f.name]));
+});
 document.addEventListener('keydown',e=>{
   const c=document.activeElement; if(!c||!c.classList||!c.classList.contains('cell'))return;
   const k=e.key.toLowerCase();
@@ -171,16 +217,12 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         filt = " ".join(f'<a class="btn" href="/?status={urllib.parse.quote(k)}">{E(k)} {v}</a>'
                         for k, v in counts.items())
         body = f"""{flash(request)}
-<div class="card"><h2>导入产品</h2><div class="cols2">
-<form method="post" action="/sku" enctype="multipart/form-data">
-<h3>上传一个 SKU</h3><p><input type="text" name="name" placeholder="产品名，如 01 姜黄精华" required></p>
-<p><input type="file" name="files" multiple accept="image/*" required></p>
-<p class="mute">一个 SKU 可以放多张图（不同角度/颜色），第一张作为主图。原图只读保存，不会被改动。</p>
-<button class="p">上传</button></form>
-<form method="post" action="/import"><h3>导入整个文件夹</h3>
-<p><input type="text" name="folder" placeholder="/Users/你的用户名/.../产品图片" required></p>
-<p class="mute">文件夹里每个子文件夹 = 一个 SKU（在访达里右键文件夹 → 按住 Option →「拷贝为路径名称」，粘贴到这里）。</p>
-<button class="p">导入</button></form></div></div>
+<div class="card"><h2>导入产品</h2>
+<div id="drop" class="drop"><div style="font-size:18px"><b>把产品图片或文件夹拖到这里</b></div>
+<div class="mute" style="margin:6px 0 12px">一个文件夹 = 一个产品（产品名用文件夹名）；也可以拖几张散图。支持 jpg / png / webp。原图只读保存，不会被改动。</div>
+<label class="btn">选图片<input type="file" id="pickFiles" multiple accept="image/*" hidden></label>
+<label class="btn">选文件夹<input type="file" id="pickDir" webkitdirectory multiple hidden></label></div>
+<div id="pick"></div></div>
 <div class="card"><h2>产品库</h2><div class="row" style="margin-bottom:10px"><a class="btn" href="/">全部</a> {filt}</div>
 <table><tr><th></th><th>产品</th><th>状态</th><th>类目</th><th>已花费用</th><th></th></tr>{''.join(rows) or '<tr><td colspan=6 class=mute>还没有产品，先在上面导入。</td></tr>'}</table></div>"""
         return page("产品库", body)
@@ -193,6 +235,45 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         except ValueError as e:
             return back("/", str(e))
         return back(f"/sku/{sid}", "已导入，下一步：识别标签")
+
+    @app.post("/upload")
+    async def upload(request: Request):
+        f = await request.form()
+        files, paths = f.getlist("files"), f.getlist("paths")
+        mode = str(f.get("mode") or "one")
+        groups: dict[str, list] = {}
+        loose = []
+        for i, up in enumerate(files):
+            path = str(paths[i]) if i < len(paths) else up.filename
+            parts = [x for x in path.split("/") if x]
+            item = (up.filename or parts[-1], await up.read())
+            if len(parts) > 1:
+                groups.setdefault(parts[-2], []).append(item)
+            else:
+                loose.append(item)
+        if loose:
+            if mode == "each":
+                for name, data in loose:
+                    groups.setdefault(Path(name).stem, []).append((name, data))
+            else:
+                groups.setdefault(Path(loose[0][0]).stem, []).extend(loose)
+        made = []
+        for name, items in groups.items():
+            try:
+                made.append(core.store.create_sku(name, sorted(items)))
+            except ValueError:
+                pass
+        if not made:
+            return JSONResponse({"error": "没有可用的图片（支持 jpg / png / webp）"})
+        if len(made) == 1:
+            return JSONResponse({"go": f"/sku/{urllib.parse.quote(made[0])}?msg=" + urllib.parse.quote("已导入。产品名可以在下面改；下一步：识别标签")})
+        return JSONResponse({"go": "/?msg=" + urllib.parse.quote(f"导入了 {len(made)} 个产品")})
+
+    @app.post("/sku/{sku_id}/rename")
+    def rename(sku_id: str, name: str = Form(...)):
+        if name.strip():
+            core.store.update_sku(sku_id, name=name.strip())
+        return back(f"/sku/{sku_id}", "已改名")
 
     @app.post("/import")
     def import_folder(folder: str = Form(...)):
@@ -212,7 +293,9 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         srcs = "".join(f'<img src="{furl(p)}">' for p in st.sources(sku_id))
         busy = core.jobs.busy(sku_id)
         label, draft = st.label(sku_id), st.label_draft(sku_id)
-        parts = [flash(request), f'<div class="card"><h2>{E(s.get("name"))} <span class="tag">{E(st.status(sku_id, busy))}</span></h2>'
+        parts = [flash(request), f'<div class="card"><form method="post" action="/sku/{E(sku_id)}/rename" class="row" style="margin-bottom:10px">'
+                 f'<input type="text" name="name" value="{E(s.get("name"))}" style="max-width:420px;font-size:18px;font-weight:600">'
+                 f'<button>改名</button><span class="tag">{E(st.status(sku_id, busy))}</span></form>'
                  f'<div class="thumbs">{srcs}</div><div class="mute">已花费用 ${sku_cost(sku_id):.3f}</div></div>']
         # ---- label
         if label and not edit:
