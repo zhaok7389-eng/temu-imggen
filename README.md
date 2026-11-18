@@ -4,57 +4,20 @@ Temu 美区美妆主图批量生成工具（私有）。需求见 `docs/DEV_REQU
 
 产品原图、生成结果、API key 都只留在本机，不进仓库（`workspace/` 整个目录被忽略）。
 
-## 第一次安装（Mac）
+## 怎么打开（Mac）
 
-在"终端"里逐行运行：
+在访达里打开 `temu-imggen` 文件夹，**双击 `启动主图工具.command`**。
 
-```bash
-cd ~/珂学家AI工具箱/电商智能批量出图/temu-imggen
-git pull
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python -m pytest -q tests        # 看到 "6 passed" 说明环境没问题（约 1 分钟）
-```
+- 第一次：会自动安装需要的东西（Python 3.12、依赖、本地 OCR），大约 3–5 分钟；然后弹窗让你粘贴一次
+  OpenAI API key，key 只存进 Mac 的钥匙串，以后不再问。没有 key 就点「先不用」，在设置里开演示模式先熟悉流程。
+- 以后：双击后几秒，浏览器自动打开工具；每次还会自动拿最新代码。
+- 弹出的终端窗口别关，**关掉窗口 = 关掉工具**。
+- 如果双击后提示「无法打开，来自身份不明的开发者」：右键这个文件 → 打开 → 再点打开（只需一次）。
+- 换 key：打开「钥匙串访问」，搜 `temu-imggen`，删掉那一条，下次双击会重新问。
 
-**本地 OCR（推荐装）**：原标签回贴和大字检查要用它。它只支持 Python 3.12 及以下：
+出错时，终端窗口会停住并显示原因，截图发给 Claude。
 
-```bash
-pip install -r requirements-ocr.txt
-```
-
-装不上（Mac 默认是 Python 3.14）就用 3.12 重建环境：`brew install python@3.12`，然后把上面的
-`python3 -m venv .venv` 换成 `python3.12 -m venv .venv` 重新来一遍。不装也能用，只是不做回贴，
-图上的包装小字就是模型画的。
-
-## API key
-
-key 只放在环境变量里，不写进任何文件：
-
-```bash
-echo 'export OPENAI_API_KEY=你的key' >> ~/.zshrc
-```
-
-重开终端后检查（只显示有没有）：
-
-```bash
-python3 -c "import os;print('KEY_SET' if os.getenv('OPENAI_API_KEY') else 'KEY_MISSING')"
-```
-
-## 每天使用
-
-```bash
-cd ~/珂学家AI工具箱/电商智能批量出图/temu-imggen
-source .venv/bin/activate
-python app.py
-```
-
-浏览器会自动打开 `http://127.0.0.1:8765`。用完在终端按 `Ctrl+C` 关掉。
-
-**第一次可以先开演示模式**（设置 → 勾选「演示模式」）：不调用 OpenAI、不花钱，出占位图，把流程点一遍。
-熟悉后关掉演示模式就是真实出图。
-
-### 流程
+## 流程
 
 1. **产品库 → 导入**：上传一个 SKU 的图片，或填一个文件夹路径（每个子文件夹 = 一个 SKU）。
 2. **识别标签**（约 $0.01）：模型逐行抄写包装文字（含原有错字），本地 OCR 做第二路核对。
@@ -71,11 +34,20 @@ python app.py
 
 同一个 SKU 要铺多个店铺：在 SKU 页点「新增变体」，会换一套风格。
 
-### 费用与预算
+## 费用与预算
 
 - 设置页的「每日预算」默认 $10，到了就停止新调用。
 - 「账本」页逐条记录每次调用的 tokens、费用、耗时（tokens 取 API 返回值）。
 - 图位模板和禁用词在 `imggen/templates/`；要改的话复制到 `workspace/templates/` 再改，程序优先读那份。
+
+## 给开发者：手动运行
+
+```bash
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt -r requirements-ocr.txt
+python -m pytest -q tests
+python app.py
+```
 
 ## 目录
 

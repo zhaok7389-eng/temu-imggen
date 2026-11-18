@@ -10,3 +10,4 @@ __pycache__/
 # all product images, generated output and run data stay local, never in git
 workspace/
 *.zip
+.venv-app/
