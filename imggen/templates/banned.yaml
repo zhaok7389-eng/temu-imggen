@@ -1,0 +1,37 @@
+# 新增文案的禁用词（C4）。不分大小写，按整词/短语匹配。
+# 数字和百分比由程序单独拦（容量、件数原样照抄的除外）。
+words:
+  - cure
+  - cures
+  - treat
+  - treats
+  - treatment
+  - heal
+  - heals
+  - healing
+  - therapy
+  - therapeutic
+  - medical
+  - medicine
+  - prescription
+  - drug
+  - disease
+  - acne treatment
+  - eczema
+  - psoriasis
+  - rosacea
+  - dermatitis
+  - infection
+  - clinically proven
+  - clinical
+  - doctor
+  - dermatologist recommended
+  - fda
+  - guaranteed
+  - permanent
+  - before and after
+  - before/after
+  - instant results
+  - miracle
+  - "#1"
+  - best

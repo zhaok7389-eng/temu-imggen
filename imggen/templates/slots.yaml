@@ -1,0 +1,75 @@
+# 8 个图位（v0）。来源：GPT 实测任务书 T1/T2/T6 的提示词；拿到《版式规范卡 v0》后在这里改。
+# 用户的审美调整都改这个文件（复制到 workspace/templates/slots.yaml 后改，程序优先读那份）。
+#
+# prompt 里的占位符由程序填：
+#   {style}       风格锁（背景、配色、光线、道具）
+#   {headline}    标题（只能来自已确认的卖点/品名/容量/件数）
+#   {bullets}     要点（同上）
+#   {capacity}    容量
+#   {scene}       场景描述（计划里写，不含文字）
+#   {people}      人物规则（人脸开关决定）
+# copy 表示这个图位加什么字：none / headline / headline_bullets / capacity / steps
+slots:
+  - id: 1
+    name: 首图
+    copy: none
+    prompt: >-
+      Square e-commerce hero image: {scene}. Product centered, filling about 65% of the frame.
+      {style} No added text.
+  - id: 2
+    name: 卖点图
+    copy: headline_bullets
+    max_bullets: 3
+    prompt: >-
+      Square benefit image. Product on the right, large. On the left, headline "{headline}" in a
+      clean bold sans-serif, then short benefit lines with small check-mark icons: {bullets}.
+      {style} Generous spacing, text readable on a phone.
+  - id: 3
+    name: 成分图
+    copy: headline
+    prompt: >-
+      Square ingredient image. Product in the center, its key ingredient shown around it as fresh,
+      natural elements: {scene}. Headline "{headline}" at the top in a clean bold sans-serif.
+      {style}
+  - id: 4
+    name: 质地特写
+    copy: none
+    prompt: >-
+      Square texture close-up. A generous swatch of the product's texture in the foreground:
+      {scene}. The product stands sharp behind it. {style} No added text.
+  - id: 5
+    name: 使用方法
+    copy: steps
+    # 每格单独生成，再由程序拼成 3 格并加编号和说明文字（实测：一次出多格会乱码）
+    step_prompt: >-
+      Square close-up photo for step {step_no} of a skincare routine: {action}. Only hands are
+      visible, no face. The product is clearly visible. {style} No added text.
+  - id: 6
+    name: 场景图
+    copy: none
+    prompt: >-
+      Square lifestyle image: {scene}. A hand holds the product naturally, label facing the camera.
+      {people} {style} No added text.
+  - id: 7
+    name: 尺寸图
+    copy: capacity
+    prompt: >-
+      Square size image. Plain pure white background, product centered and upright, soft shadow.
+      Only one line of added text below the product: "{capacity}". Nothing else.
+  - id: 8
+    name: 礼品场景
+    copy: none
+    prompt: >-
+      Square gift image: {scene}. The product is the hero, label facing the camera. {style}
+      No added text.
+
+# 每条提示词末尾都加（GPT 实测任务书原文，人脸部分由开关决定）
+fidelity: >-
+  Use the attached product photo as the only product reference. Keep the product's shape, cap,
+  colors, logo and every word on the label exactly as in the photo, including any misspellings.
+  Do not redraw, re-letter, translate or simplify the label. Do not add products, claims, badges
+  or text that are not listed in this prompt.
+no_faces: "No full human faces."
+faces_ok: >-
+  A full human face is allowed: a natural, original adult face that does not resemble any
+  celebrity or real person.

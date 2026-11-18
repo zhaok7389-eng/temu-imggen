@@ -1,8 +1,12 @@
 """Label text check (QA Q1/Q2): OCR the image and compare with the confirmed label lines."""
 from __future__ import annotations
 import difflib
+import threading
 from functools import lru_cache
 import numpy as np
+
+
+_ocr_lock = threading.Lock()   # one OCR at a time: it already uses all cores
 
 
 @lru_cache(maxsize=1)
@@ -26,7 +30,8 @@ def ocr_lines(bgr: np.ndarray, upscale: float = 2.0):
     """Return [(text, confidence, box)]. Upscaling helps the small label print."""
     import cv2
     img = cv2.resize(bgr, None, fx=upscale, fy=upscale, interpolation=cv2.INTER_CUBIC) if upscale != 1 else bgr
-    res, _ = _engine()(img)
+    with _ocr_lock:
+        res, _ = _engine()(img)
     return [(t, float(c), np.array(b) / upscale) for b, t, c in (res or [])]
 
 
