@@ -280,7 +280,7 @@ class App:
                 qa["flags"].append("原标签没贴回（%s）：图上的小字是模型画的，请看一眼" % r.reason)
         elif not ocr:
             qa["flags"].append("本地 OCR 未安装：没做原标签回贴和大字检查")
-        # Q1 big text (local OCR; gross errors only, see CHANGELOG v0.1)
+        # Q1 big text (local OCR; gross errors only, see 更新说明.md, v0.1)
         big = [b for b in label.get("big_text", []) if b.strip()]
         if big and label_text.available() and not is_steps:
             found = [t for t, _c, _b in label_text.ocr_lines(final)]

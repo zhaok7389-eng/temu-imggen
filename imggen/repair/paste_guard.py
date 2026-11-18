@@ -8,7 +8,7 @@ Reject the paste when
   - the text agreement drops (mean best-line similarity falls by more than `tol`), or
   - a label line now shows up more often than before (ghosting / doubled text).
 
-Local OCR is too noisy to tell "Replenis h" from "Replenish" (see CHANGELOG v0.1), so
+Local OCR is too noisy to tell "Replenis h" from "Replenish" (see 更新说明.md, v0.1), so
 this only catches gross damage: cut, doubled or garbled lines. Fine spelling checks
 stay with the vision model (F5).
 """

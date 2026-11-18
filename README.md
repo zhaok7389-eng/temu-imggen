@@ -1,6 +1,6 @@
 # temu-imggen
 
-Temu 美区美妆主图批量生成工具（私有）。需求见 `docs/DEV_REQUIREMENTS.md`，进度见 `docs/CHANGELOG.md`。
+Temu 美区美妆主图批量生成工具（私有）。需求见 `docs/DEV_REQUIREMENTS.md`，每次更新的内容见 `更新说明.md`。
 
 产品原图、生成结果、API key 都只留在本机，不进仓库（`workspace/` 整个目录被忽略）。
 
