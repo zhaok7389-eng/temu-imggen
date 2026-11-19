@@ -38,8 +38,8 @@ update_from_github() {
   echo "发现新版本，下载中…"
   TMP="$(mktemp -d)"
   if curl -fsSL --max-time 300 -H "Authorization: Bearer $T" -H "Accept: application/vnd.github+json" \
-       "https://api.github.com/repos/$REPO/zipball/main" -o "$TMP/app.zip" \
-     && unzip -q "$TMP/app.zip" -d "$TMP/x"; then
+       "https://api.github.com/repos/$REPO/zipball/$SHA" -o "$TMP/app.zip" \
+     && /usr/bin/ditto -x -k "$TMP/app.zip" "$TMP/x"; then
     SRC="$(find "$TMP/x" -mindepth 1 -maxdepth 1 -type d | head -1)"
     # 下载包里只有仓库里的代码（workspace、config.yaml、.venv-app 本来就不在仓库里），直接覆盖
     if [ -n "$SRC" ] && cp -R "$SRC"/. ./; then
