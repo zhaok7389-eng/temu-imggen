@@ -1,0 +1,40 @@
+:root{color-scheme:dark;background:#08080a;color:#eeedf0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;font-synthesis:none}
+*,*::before,*::after{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0}
+a{color:inherit;text-decoration:none}
+.page{max-width:1440px;margin:auto;background:#08080a;container-type:inline-size}
+.top{background:#121212;min-height:39px;height:4.1226cqw;display:flex;align-items:center}
+.navwrap{width:61.4%;margin:0 0 0 15.2%;display:flex;align-items:center;justify-content:space-between;gap:12px;height:100%}
+.mark{display:grid;place-items:center;min-width:28px}
+.mark img{width:clamp(22px,2.96cqw,36px);height:auto}
+nav{display:flex;align-items:center;gap:4.75cqw;color:#dcd9dc;font-size:clamp(11px,1.28cqw,17px);white-space:nowrap}
+nav a{padding:5px 0}
+nav a:hover{color:#fff;text-decoration:underline;text-underline-offset:4px}
+section{position:relative}
+.art{display:block;width:100%;height:auto}
+.hero-copy{position:absolute;top:14.7%;left:0;right:0;text-align:center}
+h1,h2,p{margin:0;font-weight:400}
+h1{font-size:clamp(22px,3.00cqw,44px);line-height:1.28;letter-spacing:.035em;color:#dedce1}
+.actions{display:flex;justify-content:center;align-items:center;gap:2.48cqw;margin-top:2.82cqw}
+.button{display:inline-flex;align-items:center;justify-content:center;width:13.05cqw;min-width:102px;height:4.44cqw;min-height:35px;padding:0 12px;border-radius:999px;font-size:clamp(13px,1.60cqw,23px);font-weight:450;line-height:1;transition:background-color .15s,border-color .15s,color .15s}
+.primary{background:#263ee8;color:#f0f2ff;box-shadow:0 0 27px #2224e653}
+.primary:hover{background:#3a51ff}
+.secondary{color:#f6a23d;border:1.5px solid #c67b24;background:#120b06c9;box-shadow:0 0 24px #ac571229}
+.secondary:hover{background:#38220b;border-color:#ffb65a;color:#ffcd87}
+:focus-visible{outline:2px solid #ffffff;outline-offset:4px}
+.examples{scroll-margin-top:0}
+.example-title{position:absolute;top:5.2%;left:0;right:0;text-align:center;color:#e3dfe2;font-size:clamp(13px,2.12cqw,28px);line-height:1.45}
+.caption{position:absolute;top:19.3%;font-size:clamp(11px,1.69cqw,24px);line-height:1.45;color:#eee3e1}
+.caption.review{left:4.45%}
+.caption.export{left:54%}
+@media(max-width:550px){
+ .navwrap{width:90%;margin:0 auto;gap:8px}
+ nav{gap:clamp(9px,3.5cqw,18px)}
+ .hero-copy{top:13%}
+ h1{letter-spacing:.01em}
+ .actions{margin-top:3.5cqw;gap:3cqw}
+ .button{min-width:92px;min-height:33px}
+ .caption{font-size:clamp(8px,2.14cqw,12px);top:19%}
+}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.button{transition:none}}

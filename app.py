@@ -17,6 +17,7 @@ from pathlib import Path
 import uvicorn
 import yaml
 from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
 from imggen.config import ROOT, api_key_present, load_config
@@ -27,49 +28,18 @@ E = lambda s: html.escape(str(s if s is not None else ""))  # noqa: E731
 CATS = ["serum", "cream", "mask", "cleanser", "toner", "lip", "eye", "body", "other"]
 SIZE_CN = {"big": "大", "medium": "中", "small": "小"}
 
-CSS = """
-:root{--bg:#f6f5f2;--card:#fff;--ink:#222;--mute:#777;--line:#e4e1db;--ok:#2e9b6a;--warn:#d99a1e;--bad:#d2493f;--acc:#2f6fd6}
-*{box-sizing:border-box}body{margin:0;font:15px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}
-header{background:#1f2328;color:#fff;padding:10px 20px;display:flex;gap:18px;align-items:center;flex-wrap:wrap}
-header a{color:#ddd;text-decoration:none}header a:hover{color:#fff}header b{color:#fff;margin-right:8px}
-header .sp{margin-left:auto;font-size:13px;color:#bbb}
-main{padding:20px;max-width:1400px;margin:auto}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin:0 0 16px}
-h2{margin:0 0 12px;font-size:18px}h3{margin:16px 0 8px;font-size:16px}
-table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
-input[type=text],input[type=number],select,textarea{font:inherit;padding:5px 7px;border:1px solid #ccc;border-radius:6px;width:100%}
-textarea{min-height:70px}
-button,.btn{font:inherit;padding:6px 14px;border-radius:6px;border:1px solid #bbb;background:#fff;cursor:pointer;text-decoration:none;color:var(--ink);display:inline-block}
-button.p,.btn.p{background:var(--acc);border-color:var(--acc);color:#fff}button:disabled{opacity:.5}
-.mute{color:var(--mute);font-size:13px}.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;background:#eee}
-.tag.ok{background:#dff3e8;color:#17663f}.tag.warn{background:#fdf0d6;color:#8a5a00}.tag.bad{background:#fbe0dd;color:#9b2a22}
-.yellow{background:#fff6d6}.err{color:var(--bad)}.okc{color:var(--ok)}
-.thumbs img{height:110px;border-radius:6px;border:1px solid var(--line);margin:0 6px 6px 0;background:#fff}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
-.cell{border:2px solid var(--line);border-radius:8px;padding:6px;background:#fff;outline:none}
-.cell:focus{border-color:var(--acc)}.cell.approved{border-color:var(--ok)}.cell.warn{border-color:var(--warn)}.cell.redo{border-color:var(--bad)}
-.cell img{width:100%;border-radius:4px;cursor:zoom-in;display:block}
-.cell .t{font-size:13px;margin:4px 0}.cell .f{font-size:12px;color:#8a5a00}
-.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-.cols2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-#modal{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;z-index:9;overflow:auto;padding:20px}
-#modal .imgs{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}#modal img{max-height:88vh;max-width:32vw;background:#fff}
-#modal .cap{color:#fff;text-align:center;margin-bottom:8px}
-#jobs .j{font-size:13px;margin:2px 0}
-.drop{border:2px dashed #b9c3d3;border-radius:12px;padding:28px;text-align:center;background:#fafbfd}
-.drop.over{border-color:var(--acc);background:#eef4ff}
-#pick{margin-top:14px}#pick .sum{background:#f6f7f9;border-radius:8px;padding:12px}
-@media (max-width:700px){.cols2{grid-template-columns:1fr}#modal img{max-width:92vw}}
-"""
+WEB = Path(__file__).resolve().parent / "web"
+LOCAL_CLIPS = ("window", "box", "sand", "silk")
 
 JS = r"""
+function esc(s){const e=document.createElement('span');e.textContent=String(s??'');return e.innerHTML}
 function post(url, data){return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data||{})}).then(r=>r.json())}
 function pollJobs(sku){
   const box=document.getElementById('jobs'); if(!box) return;
   let wasRunning=false;
   const tick=()=>fetch('/api/jobs'+(sku?'?sku='+encodeURIComponent(sku):'')).then(r=>r.json()).then(js=>{
     const run=js.filter(j=>j.state==='running');
-    box.innerHTML=js.slice(0,6).map(j=>`<div class="j">${j.kind} ${j.variant||''} · ${j.done}/${j.total} · ${j.state==='running'?'进行中…':j.state==='done'?'<span class=okc>完成</span>':'<span class=err>'+j.error+'</span>'}</div>`).join('')||'<span class=mute>没有进行中的任务</span>';
+    box.innerHTML=js.slice(0,6).map(j=>`<div class="j">${j.kind} ${j.variant||''} · ${j.done}/${j.total} · ${j.state==='running'?'进行中…':j.state==='done'?'<span class=okc>完成</span>':'<span class=err>'+esc(j.error)+'</span>'}</div>`).join('')||'<span class=mute>没有进行中的任务</span>';
     if(wasRunning && run.length===0){location.reload()}
     wasRunning = run.length>0;
     setTimeout(tick, run.length?2000:6000);
@@ -101,11 +71,11 @@ function setPicked(list){
   picked=list.filter(([f,p])=>/\.(jpe?g|png|webp)$/i.test(f.name)&&!p.split('/').some(x=>x.startsWith('.')));
   const box=document.getElementById('pick');
   if(!picked.length){box.innerHTML='<div class="sum err">没有找到图片（支持 jpg / png / webp）</div>';return}
-  const groups={};let loose=0;
+  const groups=Object.create(null);let loose=0;
   for(const [f,p] of picked){const s=p.split('/');if(s.length>1){const g=s[s.length-2];groups[g]=(groups[g]||0)+1}else loose++}
   const names=Object.keys(groups);
   let h='<div class="sum">';
-  if(names.length)h+=`<p><b>${names.length} 个文件夹 → ${names.length} 个产品：</b>${names.map(n=>n+'（'+groups[n]+' 张）').join('、')}</p>`;
+  if(names.length)h+=`<p><b>${names.length} 个文件夹 → ${names.length} 个产品：</b>${names.map(n=>esc(n)+'（'+groups[n]+' 张）').join('、')}</p>`;
   if(loose)h+=`<p><b>${loose} 张散图：</b>
     <label><input type="radio" name="mode" value="one" checked> 是同一个产品的几张图（不同角度/颜色）</label>
     <label style="margin-left:14px"><input type="radio" name="mode" value="each"> 每张图是一个产品</label></p>`;
@@ -134,6 +104,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('pickDir').onchange=e=>setPicked([...e.target.files].map(f=>[f,f.webkitRelativePath||f.name]));
 });
 document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){const m=document.getElementById('modal');if(m)m.style.display='none';return}
   const c=document.activeElement; if(!c||!c.classList||!c.classList.contains('cell'))return;
   const k=e.key.toLowerCase();
   if(k==='a')act(c,'approve'); if(k==='r')act(c,'redo'); if(k==='l')act(c,'toggle');
@@ -156,19 +127,55 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     def spent() -> float:
         return core.ledger.spent_today()
 
-    def page(title: str, body: str, sku: str | None = None) -> HTMLResponse:
-        c = core.cfg
-        mode = ('<span class="tag warn">演示模式：不调用 OpenAI，不花钱</span>' if c.get("demo_mode") else
-                ('<span class="tag ok">OpenAI key 已设置</span>' if api_key_present()
-                 else '<span class="tag bad">没有 OPENAI_API_KEY</span>'))
+
+    app.mount("/static", StaticFiles(directory=WEB / "static"), name="static")
+
+    @app.get("/", response_class=HTMLResponse)
+    def landing():
+        local_clips = " ".join(k for k in LOCAL_CLIPS if (ws / "landing-media" / f"{k}-tight.mp4").is_file())
+        return HTMLResponse((WEB / "landing.html").read_text(encoding="utf-8").replace("{{LOCAL_CLIPS}}", local_clips))
+
+    @app.get("/showcase-media/{asset}")
+    def showcase_media(asset: str):
+        if asset not in {f"{k}-tight.mp4" for k in LOCAL_CLIPS}:
+            return HTMLResponse("not found", 404)
+        f = ws / "landing-media" / asset
+        if not f.is_file():
+            return HTMLResponse("not found", 404)
+        return FileResponse(f, media_type="video/mp4")
+
+    def page(title: str, body: str, sku: str | None = None, *, active: str = "",
+             desc: str = "", actions: str = "", crumb: str = "") -> HTMLResponse:
+        routes = [("library", "/library", "产品库"), ("plan", "/plan", "套图计划"),
+                  ("review", "/review", "审核"), ("export", "/export", "导出")]
+        if not active:
+            active = {"审核墙": "review", "导出": "export", "设置": "settings", "账本": "ledger"}.get(
+                title, "plan" if sku else "library")
+        if sku:
+            routes[1] = ("plan", f"/sku/{urllib.parse.quote(sku)}", "套图计划")
+        def item(key, url, label, n=""):
+            current = ' aria-current="page"' if key == active else ""
+            ordinal = f'<span class="ordinal" aria-hidden="true">{n}</span>' if n else ""
+            return f'<a href="{url}"{current}>{ordinal}{label}</a>'
+        nav = "".join(item(*route, f"{i:02}") for i, route in enumerate(routes, 1))
+        settings = item("settings", "/settings", "设置")
+        ledger = item("ledger", "/ledger", "账本")
+        if core.cfg.get("demo_mode"):
+            mode = '<span class="tag warn">演示模式</span>'
+        else:
+            mode = '<span class="tag ok">API 已配置</span>' if api_key_present() else '<span class="tag warn">API 未配置</span>'
         poll = f"<script>pollJobs({json.dumps(sku or '')})</script>"
-        return HTMLResponse(f"""<!doctype html><html lang="zh"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>{E(title)} · 主图工具</title>
-<style>{CSS}</style><script>{JS}</script>
-<header><b>Temu 主图工具</b><a href="/">产品库</a><a href="/review">审核墙</a><a href="/export">导出</a>
-<a href="/settings">设置</a><a href="/ledger">账本</a>
-<span class="sp">{mode} 今日已花 ${spent():.3f} / ${float(c['budget_usd_per_day']):.0f}</span></header>
-<main><div class="card"><div id="jobs"></div></div>{body}</main><div id="modal"></div>{poll}</html>""")
+        trail = crumb or "工作台"
+        sub = f'<p class="eyebrow">{E(desc)}</p>' if desc else ""
+        return HTMLResponse(f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>{E(title)} · Temu 主图工作台</title>
+<link rel="stylesheet" href="/static/studio.css"><script>{JS}</script></head><body>
+<div class="shell"><aside class="sidebar"><a class="brand" href="/" aria-label="返回首页"><img src="/static/assets/mark.png" alt="">主图工作台</a>
+<p class="nav-label">制作流程</p><nav class="snav" aria-label="制作流程">{nav}</nav>
+<div class="sidebar-foot"><nav class="snav" aria-label="工作台管理">{settings}{ledger}</nav><p>{mode}</p></div></aside>
+<main id="main"><header class="pagehead"><div><p class="crumb">{trail}</p><h1>{E(title)}</h1>{sub}</div>{actions}</header>
+{body}<details class="jobline"><summary>后台任务</summary><div id="jobs" aria-live="polite"></div></details></main></div>
+<div id="modal"></div>{poll}</body></html>""")
 
     def back(url: str, msg: str = "") -> RedirectResponse:
         if msg:
@@ -177,7 +184,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     def flash(request: Request) -> str:
         m = request.query_params.get("msg")
-        return f'<div class="card yellow">{E(m)}</div>' if m else ""
+        return f'<div class="card yellow flash" role="status">{E(m)}</div>' if m else ""
 
     def sku_cost(sku_id: str) -> float:
         tot = 0.0
@@ -196,8 +203,8 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         return FileResponse(p)
 
     # ------------------------------------------------------------ F1 product library
-    @app.get("/", response_class=HTMLResponse)
-    def index(request: Request, status: str = ""):
+    @app.get("/library", response_class=HTMLResponse)
+    def index(request: Request, status: str = "", q: str = ""):
         st = core.store
         rows = []
         counts: dict[str, int] = {}
@@ -205,27 +212,34 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             s = st.sku(sid)
             stat = st.status(sid, core.jobs.busy(sid))
             counts[stat] = counts.get(stat, 0) + 1
-            if status and stat != status:
+            if (status and stat != status) or (q.strip().casefold() not in f'{s.get("name", "")} {sid}'.casefold()):
                 continue
             srcs = st.sources(sid)
-            thumb = f'<img src="{furl(srcs[0])}" style="height:60px">' if srcs else ""
-            cls = {"已导出": "ok", "待审核": "ok", "有问题": "bad", "生成中": "warn", "待确认": "warn"}.get(stat, "")
-            rows.append(f'<tr><td>{thumb}</td><td><a href="/sku/{E(sid)}"><b>{E(s.get("name"))}</b></a>'
-                        f'<div class="mute">{E(sid)}</div></td><td><span class="tag {cls}">{E(stat)}</span></td>'
-                        f'<td>{E(s.get("category", ""))}</td><td>${sku_cost(sid):.3f}</td>'
-                        f'<td><a class="btn" href="/sku/{E(sid)}">打开</a></td></tr>')
-        filt = " ".join(f'<a class="btn" href="/?status={urllib.parse.quote(k)}">{E(k)} {v}</a>'
-                        for k, v in counts.items())
+
+            thumb = f'<img class="table-thumb" src="{furl(srcs[0])}" alt="">' if srcs else ""
+            cls = {"已导出": "ok", "待审核": "warn", "有问题": "bad", "生成中": "warn", "待确认": "warn"}.get(stat, "")
+            rows.append(f'<tr><td><a class="lib-pair" href="/sku/{E(sid)}">{thumb}<span><b>{E(s.get("name"))}</b>'
+                        f'<span class="mute" style="display:block">{E(sid)}</span></span></a></td>'
+                        f'<td><span class="tag {cls}">{E(stat)}</span></td><td>{E(s.get("category") or "—")}</td>'
+                        f'<td>${sku_cost(sid):.3f}</td><td><a class="btn" href="/sku/{E(sid)}">打开</a></td></tr>')
+        def filter_link(key, label):
+            url = "/library" + ("?" + urllib.parse.urlencode({k:v for k,v in {"status":key,"q":q}.items() if v}) if key or q else "")
+            return f'<a class="btn" href="{E(url)}" aria-current="{"true" if key == status else "false"}">{label}</a>'
+        filt = filter_link("", f"全部 {sum(counts.values())}") + " ".join(filter_link(k,f"{E(k)} {v}") for k,v in counts.items())
         body = f"""{flash(request)}
-<div class="card"><h2>导入产品</h2>
-<div id="drop" class="drop"><div style="font-size:18px"><b>把产品图片或文件夹拖到这里</b></div>
-<div class="mute" style="margin:6px 0 12px">一个文件夹 = 一个产品（产品名用文件夹名）；也可以拖几张散图。支持 jpg / png / webp。原图只读保存，不会被改动。</div>
-<label class="btn">选图片<input type="file" id="pickFiles" multiple accept="image/*" hidden></label>
-<label class="btn">选文件夹<input type="file" id="pickDir" webkitdirectory multiple hidden></label></div>
-<div id="pick"></div></div>
-<div class="card"><h2>产品库</h2><div class="row" style="margin-bottom:10px"><a class="btn" href="/">全部</a> {filt}</div>
-<table><tr><th></th><th>产品</th><th>状态</th><th>类目</th><th>已花费用</th><th></th></tr>{''.join(rows) or '<tr><td colspan=6 class=mute>还没有产品，先在上面导入。</td></tr>'}</table></div>"""
-        return page("产品库", body)
+<div class="card flat"><div class="row section-top"><h2>商品列表</h2>
+<form action="/library" method="get" class="row"><input type="hidden" name="status" value="{E(status)}">
+<input type="search" name="q" class="field-search" aria-label="搜索商品" placeholder="搜索商品名或 SKU" value="{E(q)}"><button>搜索</button></form></div>
+<div class="row library-filter" style="margin-bottom:13px">{filt}</div>
+<div class="table-scroll"><table class="library-table compact"><thead><tr><th>商品</th><th>状态</th><th>类目</th><th>已用费用</th><th>操作</th></tr></thead><tbody>{''.join(rows) or '<tr><td colspan=5 class=empty>没有符合条件的商品。</td></tr>'}</tbody></table></div></div>
+<section class="card" id="drop-area"><h2>导入商品</h2>
+<div id="drop" class="drop"><b>把商品图片或文件夹拖到这里</b>
+<p class="mute">支持 JPG、PNG、WebP。一个文件夹对应一个商品，原图不会被改动。</p>
+<label class="btn" tabindex="0" onkeydown="if(event.key==='Enter'||event.key===' '){{event.preventDefault();this.querySelector('input').click()}}">选图片<input type="file" id="pickFiles" multiple accept="image/*" hidden></label>
+<label class="btn" tabindex="0" onkeydown="if(event.key==='Enter'||event.key===' '){{event.preventDefault();this.querySelector('input').click()}}">选文件夹<input type="file" id="pickDir" webkitdirectory multiple hidden></label></div>
+<div id="pick"></div></section>"""
+        return page("产品库", body, desc="查找商品、导入原图，或继续上一次的制作。",
+                    actions='<a class="btn p" href="#drop-area">导入商品</a>')
 
     @app.post("/sku")
     async def new_sku(name: str = Form(...), files: list[UploadFile] = File(...)):
@@ -233,7 +247,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         try:
             sid = core.store.create_sku(name, data)
         except ValueError as e:
-            return back("/", str(e))
+            return back("/library", str(e))
         return back(f"/sku/{sid}", "已导入，下一步：识别标签")
 
     @app.post("/upload")
@@ -267,7 +281,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             return JSONResponse({"error": "没有可用的图片（支持 jpg / png / webp）"})
         if len(made) == 1:
             return JSONResponse({"go": f"/sku/{urllib.parse.quote(made[0])}?msg=" + urllib.parse.quote("已导入。产品名可以在下面改；下一步：识别标签")})
-        return JSONResponse({"go": "/?msg=" + urllib.parse.quote(f"导入了 {len(made)} 个产品")})
+        return JSONResponse({"go": "/library?msg=" + urllib.parse.quote(f"导入了 {len(made)} 个产品")})
 
     @app.post("/sku/{sku_id}/rename")
     def rename(sku_id: str, name: str = Form(...)):
@@ -280,36 +294,73 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         try:
             made = core.store.import_folder(folder.strip().strip("'\""))
         except ValueError as e:
-            return back("/", str(e))
-        return back("/", f"导入了 {len(made)} 个 SKU：" + "、".join(made))
+            return back("/library", str(e))
+        return back("/library", f"导入了 {len(made)} 个 SKU：" + "、".join(made))
+
 
     # ------------------------------------------------------------ SKU page
+    @app.get("/plan", response_class=HTMLResponse)
+    def plan_index(request: Request):
+        st = core.store
+        rows = []
+        for sid in st.list_skus():
+            src = st.sources(sid)
+            thumb = f'<img class="table-thumb" src="{furl(src[0])}" alt="">' if src else ''
+            name = st.sku(sid).get("name",sid)
+            count = len(st.variants(sid))
+            rows.append(f'<tr><td><a class="lib-pair" href="/sku/{E(sid)}">{thumb}<b>{E(name)}</b></a></td>'
+                        f'<td>{count} 套</td><td>{E(st.status(sid,core.jobs.busy(sid)))}</td>'
+                        f'<td><a class="btn" href="/sku/{E(sid)}">打开计划</a></td></tr>')
+        body = f"""{flash(request)}<div class="row section-top"><h2>选择要制作的商品</h2><a href="/library">去产品库</a></div>
+<div class="table-scroll"><table class="compact"><thead><tr><th>商品</th><th>当前计划</th><th>状态</th><th>操作</th></tr></thead><tbody>
+{''.join(rows) or '<tr><td colspan=4 class=empty>还没有商品，请先从产品库导入。</td></tr>'}</tbody></table></div>"""
+        return page("套图计划", body, active="plan", desc="每套计划归属一个商品，从这里进入对应工作区。")
+
     @app.get("/sku/{sku_id}", response_class=HTMLResponse)
     def sku_page(request: Request, sku_id: str, edit: int = 0):
         st = core.store
         s = st.sku(sku_id)
         if not s:
-            return back("/", "没有这个 SKU")
-        srcs = "".join(f'<img src="{furl(p)}">' for p in st.sources(sku_id))
+            return back("/library", "没有这个 SKU")
+        sources = st.sources(sku_id)
         busy = core.jobs.busy(sku_id)
         label, draft = st.label(sku_id), st.label_draft(sku_id)
-        parts = [flash(request), f'<div class="card"><form method="post" action="/sku/{E(sku_id)}/rename" class="row" style="margin-bottom:10px">'
-                 f'<input type="text" name="name" value="{E(s.get("name"))}" style="max-width:420px;font-size:18px;font-weight:600">'
-                 f'<button>改名</button><span class="tag">{E(st.status(sku_id, busy))}</span></form>'
-                 f'<div class="thumbs">{srcs}</div><div class="mute">已花费用 ${sku_cost(sku_id):.3f}</div></div>']
-        # ---- label
+        picked = st.variants(sku_id)
+        requested_variant = request.query_params.get("variant", "")
+        active = requested_variant if requested_variant in picked else (picked[0] if picked else "")
+        name = s.get("name") or sku_id
+        main_pic = (f'<a class="suite-ref-photo" href="{E(furl(sources[0]))}" target="_blank" rel="noopener">'
+                    f'<img src="{E(furl(sources[0]))}" alt="{E(name)} 商品参考原图"></a>' if sources else
+                    '<div class="suite-ref-photo suite-ref-empty">尚未上传参考图</div>')
+        other_pics = "".join(f'<a href="{E(furl(p))}" target="_blank" rel="noopener">'
+                             f'<img src="{E(furl(p))}" alt="参考图 {i}"></a>' for i,p in enumerate(sources[1:], 2))
+        label_status = "包装文字已确认" if label else ("包装文字待确认" if draft else "尚未识别包装文字")
+        summary = "".join(f'<li>{E(x)}</li>' for x in (label or {}).get("allowed_claims", []))
+        req = (f'<div class="suite-claims"><span>已确认的卖点</span><ul>{summary}</ul></div>' if summary else "")
+        reference = f"""<aside class="suite-reference" aria-label="商品资料"><h2>商品资料</h2>
+{main_pic}<div class="suite-ref-thumbs">{other_pics}</div>
+<h3>{E(name)}</h3><p class="suite-meta">SKU：{E(sku_id)}</p>
+<div class="suite-meta">{E(st.status(sku_id, busy))} · 已花 ${sku_cost(sku_id):.3f}</div>
+<details class="suite-details"><summary>修改商品名称</summary>
+<form method="post" action="/sku/{E(sku_id)}/rename" class="row">
+<input type="text" name="name" aria-label="商品名称" value="{E(name)}" required><button>改名</button>
+</form></details>
+<div class="suite-requirements"><h3>制作要求</h3><ul><li>保留商品外形与包装文字</li><li>仅使用已确认的卖点与文案</li></ul>
+<p class="suite-meta">{label_status}</p>{req}</div></aside>"""
         if label and not edit:
-            parts.append(label_summary(sku_id, label))
+            right = variants_block(sku_id, busy, active)
+            right += '<details class="suite-details suite-label-detail"><summary>查看已确认的商品标签</summary>' + label_summary(sku_id, label) + '</details>'
         elif draft or (label and edit):
-            parts.append(label_form(sku_id, label if (label and edit) else draft, from_label=bool(label and edit)))
+            right = label_form(sku_id, label if (label and edit) else draft, from_label=bool(label and edit))
         else:
-            parts.append(f"""<div class="card"><h2>第 1 步 · 识别标签</h2>
-<p>用 OpenAI 视觉模型逐行抄写包装上的文字（含原有错字），本地 OCR 做第二路核对。约 $0.01。</p>
-<form method="post" action="/sku/{E(sku_id)}/transcribe"><button class="p" {'disabled' if busy else ''}>识别标签</button></form></div>""")
-        # ---- variants
-        if label and not edit:
-            parts.append(variants_block(sku_id, busy))
-        return page(s.get("name", sku_id), "".join(parts), sku_id)
+            right = f"""<div class="suite-empty"><h2>先识别商品标签</h2>
+<p>用 OpenAI 视觉模型逐行抄写包装文字（保留原有错字），再用本地 OCR 核对。实际费用以账本为准，预计约 $0.01。</p>
+<form method="post" action="/sku/{E(sku_id)}/transcribe"><button class="p" {'disabled' if busy else ''}>识别标签</button></form>
+</div>"""
+        body = f"""{flash(request)}<div class="suite-page">
+<div class="suite-layout">{reference}<section class="suite-main" aria-label="套图计划">{right}</section></div>
+</div>"""
+        return page("套图计划", body, sku_id, desc="确认本次要制作的图片。", crumb=f'<a href="/library">产品库</a> / <a href="/plan">套图计划</a> / {E(name)}')
 
     def label_summary(sku_id: str, lab: dict) -> str:
         lines = "".join(f"<li>{E(ln['text'])} <span class=mute>{SIZE_CN.get(ln.get('size'), '')}</span></li>"
@@ -368,56 +419,80 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 <p>用法步骤（每行一个，最多 3 行，会印在使用方法图上；可空）<textarea name="usage_steps">{E(chr(10).join(d.get('usage_steps', [])))}</textarea></p>
 </div></div><button class="p">确认标签</button></form></div>"""
 
-    def variants_block(sku_id: str, busy: bool) -> str:
+    def variants_block(sku_id: str, busy: bool, active: str = "") -> str:
         st = core.store
         vs = st.variants(sku_id)
         nxt = chr(ord(vs[-1]) + 1) if vs else "A"
-        out = [f"""<div class="card"><h2>第 3 步 · 套图计划与出图</h2>
-<p class="mute">一个变体 = 一套 8 张。同一 SKU 铺不同店铺时加变体，系统会换风格、避开已用过的风格。</p>
-<form method="post" action="/sku/{E(sku_id)}/plan/{nxt}"><button class="p" {'disabled' if busy else ''}>{'做计划（变体 A）' if not vs else f'新增变体 {nxt}'}</button></form></div>"""]
-        for v in vs:
-            out.append(plan_card(sku_id, v, busy))
-        return "".join(out)
+        action = f'<form method="post" action="/sku/{E(sku_id)}/plan/{nxt}"><button class="{"" if vs else "p"}" {"disabled" if busy else ""}>{"新增变体 " + nxt if vs else "制定计划"}</button></form>'
+        if not vs:
+            return f"""<div class="suite-empty"><h2>还没有套图计划</h2>
+<p>创建变体 A 后可以确认各图位的内容，再选择是否开始出图。</p>{action}</div>"""
+        tabs = "".join(f'<a {"aria-current=page" if v == active else ""} href="/sku/{E(sku_id)}?variant={E(v)}">变体 {E(v)}</a>' for v in vs)
+        toolbar = f'<div class="suite-variants"><nav aria-label="套图变体">{tabs}</nav>{action}</div>'
+        return toolbar + plan_card(sku_id, active, busy)
 
     def plan_card(sku_id: str, v: str, busy: bool) -> str:
         st = core.store
         plan = st.plan(sku_id, v)
         calls, usd = core.estimate(plan)
         style = plan.get("style", {})
-        srows = "".join(f'<p>{lab}<input type="text" name="style_{k}" value="{E(style.get(k))}"></p>'
+        srows = "".join(f'<label>{lab}<input type="text" name="style_{k}" value="{E(style.get(k))}"></label>'
                         for k, lab in (("backdrop", "背景"), ("palette", "配色"), ("light", "光线"), ("props", "道具")))
-        slot_rows = []
         tpl_names = {int(t["id"]): t["name"] for t in core.tpl["slots"]["slots"]}
-        for sid in sorted(plan["slots"], key=int):
+        sources = st.sources(sku_id)
+        fallback = furl(sources[0]) if sources else ""
+        slot_rows = []
+        for sid in sorted(plan.get("slots", {}), key=int):
             s = plan["slots"][sid]
-            f = []
+            slot_name = tpl_names.get(int(sid), s.get("name")) or f"图位 {sid}"
+            fields = []
             if "headline" in s:
-                f.append(f'标题 <input type="text" name="h{sid}" value="{E(s["headline"])}">')
+                fields.append(f'<label>标题<input type="text" name="h{sid}" value="{E(s["headline"])}"></label>')
             if "bullets" in s:
-                f.append(f'要点（每行一个）<textarea name="b{sid}">{E(chr(10).join(s["bullets"]))}</textarea>')
+                fields.append(f'<label>要点（每行一个）<textarea name="b{sid}">{E(chr(10).join(s["bullets"]))}</textarea></label>')
             if "capacity" in s:
-                f.append(f'容量文字 <input type="text" name="c{sid}" value="{E(s["capacity"])}">')
+                fields.append(f'<label>容量文字<input type="text" name="c{sid}" value="{E(s["capacity"])}"></label>')
             if "steps" in s:
                 for k, stp in enumerate(s["steps"]):
-                    f.append(f'第{k + 1}步说明 <input type="text" name="sc{sid}_{k}" value="{E(stp.get("caption"))}">'
-                             f'<span class=mute>画面：</span><input type="text" name="sa{sid}_{k}" value="{E(stp.get("action"))}">')
+                    fields.append(f'<label>第 {k + 1} 步说明<input type="text" name="sc{sid}_{k}" value="{E(stp.get("caption"))}"></label>'
+                                  f'<label>画面<input type="text" name="sa{sid}_{k}" value="{E(stp.get("action"))}"></label>')
             if "scene" in s:
-                f.append(f'画面（不含文字）<input type="text" name="sn{sid}" value="{E(s["scene"])}">')
+                fields.append(f'<label>画面（不含文字）<input type="text" name="sn{sid}" value="{E(s["scene"])}"></label>')
             cur = st.current(sku_id, v, int(sid))
-            img = f'<img src="{furl(cur["file"])}" style="width:120px;border-radius:6px">' if cur else ""
-            skip = f'<div class="mute">{E(s.get("skip_reason", "跳过"))}</div>' if s.get("skip") else ""
-            slot_rows.append(f'<tr><td><b>{sid}</b> {E(tpl_names.get(int(sid), s.get("name")))}{skip}</td><td>{"".join(f"<div>{x}</div>" for x in f)}</td><td>{img}</td></tr>')
-        issues = "".join(f'<li class="err">{E(x)}</li>' for x in plan.get("issues", []))
+            preview = furl(cur["file"]) if cur else fallback
+            preview_type = "结果" if cur else "原图参考"
+            pic = (f'<a class="suite-shot" href="{E(preview)}" target="_blank" rel="noopener"><img src="{E(preview)}" alt="{E(slot_name)} · {preview_type}" loading="lazy"><small>{preview_type}</small></a>'
+                   if preview else '<span class="suite-shot suite-shot-empty">无预览</span>')
+            step_hint = " / ".join(x.get("action", "") for x in s.get("steps", []) if x.get("action"))
+            direction = (s.get("scene") or step_hint or s.get("headline") or ("容量：" + s["capacity"] if s.get("capacity") else "") or style.get("backdrop") or "按当前变体的风格制作")
+            approved = st.review(sku_id, v).get(sid, {}).get("status") == "approved"
+            status = "已跳过" if s.get("skip") else "已通过" if approved and cur else "待审核" if cur else "待出图"
+            variant = "skip" if s.get("skip") else "ok" if approved and cur else "todo"
+            note = f'<small>{E(s.get("skip_reason") or "未列入本次出图")}</small>' if s.get("skip") else ""
+            editor = ('<details class="suite-details suite-row-edit"><summary>编辑方向与文案</summary>' + "".join(fields) + '</details>') if fields else ""
+            slot_rows.append(f'<div class="suite-plan-row"><div class="suite-slot">{pic}<div><b>{E(slot_name)}</b><small>图位 {E(sid)}{note}</small></div></div>'
+                             f'<div class="suite-direction"><div>{E(direction)}</div>{editor}</div>'
+                             f'<div class="suite-col-state"><span class="suite-state {variant}">{status}</span></div></div>')
+        issues = "".join(f'<li>{E(x)}</li>' for x in plan.get("issues", []))
         done = sum(1 for s in plan_slots(plan) if st.attempts(sku_id, v, s))
         total = len(plan_slots(plan))
-        return f"""<div class="card"><h2>变体 {v}</h2>
-<form method="post" action="/sku/{E(sku_id)}/plan/{v}/save"><div class="cols2"><div><h3>风格锁</h3>{srows}</div>
-<div><h3>状态</h3><p>已出 {done}/{total} 个图位　预计 {calls} 次调用 ≈ ${usd}（按 ${core.cfg.get('est_usd_per_image', 0.026)}/张）</p>
-<p>人脸：{'允许' if plan.get('faces') else '不出现完整人脸'}</p>{'<ul>' + issues + '</ul>' if issues else '<p class="okc">文案校验通过</p>'}</div></div>
-<h3>图位</h3><table>{''.join(slot_rows)}</table><p><button>保存修改</button></p></form>
-<div class="row"><form method="post" action="/sku/{E(sku_id)}/generate/{v}"><button class="p" {'disabled' if busy or plan.get('issues') else ''}>{'开始出图' if done == 0 else '补齐没出的图位'}</button></form>
-<form method="post" action="/sku/{E(sku_id)}/plan/{v}" onsubmit="return confirm('重新做计划会覆盖上面的修改，已出的图保留。继续？')"><button {'disabled' if busy else ''}>重新做计划</button></form>
-<a class="btn" href="/review?sku={E(sku_id)}">去审核</a></div></div>"""
+        form_id = "suite-save-" + E(v)
+        generate_name = "开始出图" if not done else "补齐未出图位"
+        result_extra = f" · 预计 {calls} 次调用，约 ${usd}" if calls else ""
+        return f"""<div class="suite-plan"><div class="suite-plan-title"><h2>本次要做的图</h2><span>共 {total} 张 · 已出 {done} 张</span></div>
+<form id="{form_id}" method="post" action="/sku/{E(sku_id)}/plan/{E(v)}/save">
+<div class="suite-plan-table"><div class="suite-table-head"><span>图位</span><span>制作方向</span><span>状态</span></div>
+{''.join(slot_rows)}</div>
+<details class="suite-details suite-style"><summary>风格设置 <span class="suite-meta">背景 · 配色 · 光线 · 道具</span></summary><div class="suite-style-grid">{srows}</div></details>
+</form>
+<div class="suite-check"><span>{'文案有待修正' if issues else '文案校验已通过'}{E(result_extra)}</span><span>{'允许人脸' if plan.get('faces') else '不出现完整人脸'}</span></div>
+{'<ul class="suite-issues">'+issues+'</ul>' if issues else ''}
+<div class="suite-actionbar">
+<form method="post" action="/sku/{E(sku_id)}/plan/{E(v)}" onsubmit="return confirm('重新做计划会覆盖上面的修改，已出的图保留。继续？')"><button {'disabled' if busy else ''}>重新做计划</button></form>
+<a class="btn" href="/review?sku={E(sku_id)}">去审核</a>
+<button class="suite-save" type="submit" form="{form_id}">保存草稿</button>
+<form method="post" action="/sku/{E(sku_id)}/generate/{E(v)}"><button class="p" {'disabled' if busy or issues or not total else ''}>{generate_name}</button></form>
+</div><p class="suite-meta suite-action-note">改动请先保存；点击出图会使用当前已保存的计划。</p></div>"""
 
     @app.post("/sku/{sku_id}/transcribe")
     def do_transcribe(sku_id: str):
@@ -515,7 +590,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                     if stt == "approved":
                         n_ok += 1
                     if cur is None:
-                        cells.append(f'<div class="cell"><div class="t">{slot} {E(tpl_names.get(slot))}</div><div class="mute">还没出图</div></div>')
+                        cells.append(f'<div class="cell review-missing"><span class="eyebrow">图位 {slot:02}</span><div class="t">{E(tpl_names.get(slot))}</div><span class="tag warn">待出图</span></div>')
                         continue
                     qa = cur["qa"]
                     flags = qa.get("flags", []) + ([qa["error"]] if qa.get("error") else [])
@@ -524,28 +599,35 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                     caps = ["产品原图", "AI 生成图", "贴回原标签后"][:len(urls)]
                     which = "回贴版" if cur["file"] == cur["pasted"] else "生成原图"
                     tog = f'<button onclick="act(this,\'toggle\')" title="L">{"改用生成原图" if which == "回贴版" else "改用回贴版"}</button>' if cur["pasted"] else ""
-                    status_tag = {"approved": '<span class="tag ok">已通过</span>', "redo": '<span class="tag bad">重出中</span>'}.get(stt, "")
+                    status_tag = {"approved": '<span class="tag ok">已通过</span>', "redo": '<span class="tag bad">待重出</span>'}.get(stt, '<span class="tag warn">待审核</span>')
+                    compare = E("showBig(" + json.dumps(urls) + "," + json.dumps(caps, ensure_ascii=False) + ")")
                     cells.append(
-                        f'<div class="cell {cls}" tabindex="0" data-sku="{E(sid)}" data-v="{v}" data-slot="{slot}">'
-                        f'<img src="{furl(cur["file"])}" onclick=\'showBig({json.dumps(urls)},{json.dumps(caps, ensure_ascii=False)})\'>'
-                        f'<div class="t">{slot} {E(tpl_names.get(slot))} · 第{cur["attempts"]}版 · {which} {status_tag}</div>'
-                        + "".join(f'<div class="f">⚠ {E(x)}</div>' for x in flags) +
-                        f'<div class="row" style="margin-top:4px"><button onclick="act(this,\'approve\')" title="A">通过</button>'
-                        f'<button onclick="act(this,\'redo\')" title="R">重出</button>{tog}</div></div>')
-                if show == "todo" and not sku and n_ok == len(plan_slots(plan)):
+                        f'<article class="cell {cls}" tabindex="0" data-sku="{E(sid)}" data-v="{v}" data-slot="{slot}">'
+                        f'<button type="button" class="review-photo" onclick="{compare}" aria-label="对照原图：{E(tpl_names.get(slot))}">'
+                        f'<img loading="lazy" src="{furl(cur["file"])}" alt=""></button>'
+                        f'<div class="row section-top"><div class="t">{slot:02} · {E(tpl_names.get(slot))}</div>{status_tag}</div>'
+                        f'<p class="mute">第 {cur["attempts"]} 版 · {which}</p>'
+                        + "".join(f'<div class="f">{E(x)}</div>' for x in flags) +
+                        f'<div class="row"><button onclick="act(this,\'approve\')" title="A">通过</button>'
+                        f'<button onclick="act(this,\'redo\')" title="R">重出</button>{tog}</div></article>')
+                if show == "todo" and n_ok == len(plan_slots(plan)):
                     continue
                 name = st.sku(sid).get("name", sid)
                 blocks.append(f'<div class="card"><div class="row"><h2 style="margin:0">{E(name)} · 变体 {v}</h2>'
-                              f'<span class="mute">通过 {n_ok}/{len(plan_slots(plan))}</span>'
+                              f'<span class="tag">通过 {n_ok} / {len(plan_slots(plan))}</span>'
                               f'<button onclick="post(\'/api/review_all\',{{sku:\'{E(sid)}\',variant:\'{v}\'}}).then(()=>location.reload())">整套通过</button>'
-                              f'<a class="btn" href="/sku/{E(sid)}">SKU 页</a></div>'
+                              f'<a class="btn" href="/sku/{E(sid)}">返回套图计划</a></div>'
                               f'<div class="grid" style="margin-top:10px">{"".join(cells)}</div></div>')
-        body = f"""{flash(request)}<div class="card"><div class="row"><b>审核墙</b>
-<span class="mute">点图看大图（原图 / 生成图 / 回贴后并排）。选中一张后按 A 通过、R 重出、L 切换回贴版。黄框 = 有提示，绿框 = 已通过。</span>
-<a class="btn" href="/review?show=all">显示全部</a><a class="btn" href="/review">只看没审完的</a>
-<button class="p" onclick="if(confirm('把所有没有黄色提示的图都设为通过？'))post('/api/review_clean').then(r=>{{alert('通过了 '+r.n+' 张');location.reload()}})">批量通过没有提示的</button></div></div>
-{''.join(blocks) or '<div class="card mute">没有要审核的图。</div>'}"""
-        return page("审核墙", body)
+        choices = [("", "所有商品")] + [(sid, st.sku(sid).get("name", sid)) for sid in st.list_skus()]
+        options = "".join(f'<option value="{E(sid)}" {"selected" if sid == sku else ""}>{E(name)}</option>' for sid,name in choices)
+        suffix = '&amp;sku='+urllib.parse.quote(sku) if sku else ''
+        body = f"""{flash(request)}<div class="row section-top">
+<form action="/review" method="get" class="row"><input type="hidden" name="show" value="{E(show)}"><select name="sku" aria-label="筛选商品" style="width:auto">{options}</select><button>筛选</button></form>
+<div class="row"><a class="btn {'p' if show != 'all' else ''}" href="/review?show=todo{suffix}">待处理</a><a class="btn {'p' if show == 'all' else ''}" href="/review?show=all{suffix}">全部</a></div></div>
+<p class="mute">点击成图可并排对照原图。键盘：A 通过、R 重出、L 切换生成版和回贴版。</p>
+{''.join(blocks) or '<div class="card empty">没有要审核的图。可回到套图计划开始出图。</div>'}"""
+        action = '<button onclick="if(confirm(\'把所有无提示的图设为通过？\'))post(\'/api/review_clean\').then(()=>location.reload())">批量通过无提示图</button>' if blocks and not sku else ''
+        return page("审核墙", body, desc="对照商品原图，逐张通过，或写明原因后重出。", actions=action)
 
     @app.post("/api/review")
     async def api_review(request: Request):
@@ -611,19 +693,19 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                 rev = st.review(sid, v)
                 ok = sum(1 for s in slots if rev.get(str(s), {}).get("status") == "approved")
                 rows.append(f'<tr><td><input type="checkbox" name="item" value="{E(sid)}|{v}" {"checked" if ok == len(slots) and slots else ""}></td>'
-                            f'<td>{E(st.sku(sid).get("name"))}</td><td>{v}</td><td>{ok}/{len(slots)}</td>'
+                            f'<td>{E(st.sku(sid).get("name"))}</td><td>{v}</td><td><span class="tag {"ok" if slots and ok == len(slots) else "warn"}">{ok} / {len(slots)}</span></td>'
                             f'<td>{E(st.sku(sid).get("exported", ""))}</td></tr>')
         exp = Path(core.cfg["workspace"]) / "exports"
         zips = sorted(exp.glob("*.zip"), reverse=True)[:10] if exp.exists() else []
         links = "".join(f'<li><a href="{furl(z)}">{E(z.name)}</a></li>' for z in zips)
-        body = f"""{flash(request)}<div class="card"><h2>导出</h2>
-<form method="post" action="/export"><table><tr><th></th><th>产品</th><th>变体</th><th>已通过</th><th>上次导出</th></tr>{''.join(rows)}</table>
+        body = f"""{flash(request)}<div class="card flat"><h2>选择要打包的套图</h2>
+<form method="post" action="/export"><div class="table-scroll"><table><tr><th></th><th>产品</th><th>变体</th><th>已通过</th><th>上次导出</th></tr>{''.join(rows) or '<tr><td colspan=5 class=empty>还没有可导出的套图。</td></tr>'}</table></div>
 <p><label><input type="checkbox" name="all"> 没通过的图也导出（默认只导出已通过的）</label></p>
 <p class="mute">输出：{{sku}}_{{变体}}_{{图位两位数}}.jpg（质量 92）、ERP 导入表 erp_import.xlsx、每套一张联系表，打包成 zip。
-ERP 列名可在 config.yaml 的 erp_columns 改。</p><button class="p">导出</button></form></div>
+ERP 列名可在 config.yaml 的 erp_columns 改。</p><button class="p" type="submit" {"disabled" if not rows else ""}>生成 ZIP</button></form></div>
 <div class="card"><h2>最近导出</h2><ul>{links or '<li class=mute>还没有</li>'}</ul>
 <p class="mute">文件夹位置：{E(exp)}</p></div>"""
-        return page("导出", body)
+        return page("导出", body, desc="默认只打包通过审核的图，包含 JPG、联系表和 ERP 导入表。")
 
     @app.post("/export")
     async def do_export(request: Request):
@@ -652,19 +734,21 @@ ERP 列名可在 config.yaml 的 erp_columns 改。</p><button class="p">导出<
         tp = c.get("text_pricing_usd_per_million_tokens", {})
         pr = c["pricing_usd_per_million_tokens"]
         f = c.get("faces", {})
-        body = f"""{flash(request)}<div class="card"><h2>设置</h2><form method="post" action="/settings">
-<p>API key：{'<span class="tag ok">可用（已设置环境变量）</span>' if api_key_present() else '<span class="tag bad">没有设置</span> 在终端运行 <code>export OPENAI_API_KEY=你的key</code> 后再 <code>python app.py</code>'}</p>
-<p><label><input type="checkbox" name="demo_mode" {'checked' if c.get('demo_mode') else ''}> 演示模式（不调用 OpenAI、不花钱，出占位图，用来熟悉流程）</label></p>
-<div class="cols2"><div>
+        api = ('<span class="tag ok">环境变量已配置</span>' if api_key_present() else '<span class="tag warn">未配置 API</span>')
+        mode_copy = "打开后使用演示结果，不调用模型。"
+        model_link = '<a href="/settings?models=1">查看账号可用模型</a>'
+        body = f"""{flash(request)}<form method="post" action="/settings" class="settings-form"><div class="card settings-section"><h2>连接与使用模式</h2>
+<p>{api}</p><p><label><input type="checkbox" name="demo_mode" {'checked' if c.get('demo_mode') else ''}> 演示模式</label> <span class="mute">{mode_copy}</span></p></div>
+<div class="cols2"><section class="card settings-section"><h2>出图与预算</h2>
 <p>每日预算（美元）<input type="number" step="0.5" name="budget" value="{E(c['budget_usd_per_day'])}"></p>
 <p>并发（同时出几张）<input type="number" name="concurrency" value="{E(c.get('concurrency', 6))}"></p>
 <p>出图模型 <input type="text" name="model" value="{E(g['model'])}"></p>
 <p>画质 <select name="quality">{''.join(f'<option {"selected" if g["quality"] == q else ""}>{q}</option>' for q in ("low", "medium", "high"))}</select></p>
 <p><label><input type="checkbox" name="route" {'checked' if g.get('route_label_heavy') else ''}> 标签小字多（≥6 行）或有疑似错字时改用</label>
 <input type="text" name="heavy_model" value="{E(g['label_heavy_model'])}"><span class=mute>（第二轮实测：默认 flare 即可，sunburst 只在修复时用，所以默认关闭）</span></p>
-</div><div>
+</section><section class="card settings-section"><h2>模型与规则</h2>
 <p>文本/视觉模型（识别标签、做计划）<input type="text" name="text_model" value="{E(c.get('text_model', 'auto'))}">
-<span class=mute>auto = 自动选账号里最新的。</span> <a href="/settings?models=1">查看账号可用模型</a></p>{opts}
+<span class=mute>auto = 自动选账号里最新的。</span> {model_link}</p>{opts}
 <p><label><input type="checkbox" name="faces_all" {'checked' if f.get('allow_full_face') else ''}> 所有类目都允许 AI 完整人脸</label></p>
 <p>只在这些类目允许人脸（逗号分隔）<input type="text" name="faces_cats" value="{E(','.join(f.get('categories') or []))}">
 <span class=mute>人脸只用于场景图（图位 6），首图仍以产品为主。</span></p>
@@ -672,8 +756,8 @@ ERP 列名可在 config.yaml 的 erp_columns 改。</p><button class="p">导出<
 图片入 <input type="number" step="0.01" name="p_ii" value="{pr['image_input']}"> 输出 <input type="number" step="0.01" name="p_io" value="{pr['image_output']}"></p>
 <p>文本模型 输入 <input type="number" step="0.01" name="t_in" value="{tp.get('input', 0)}"> 输出 <input type="number" step="0.01" name="t_out" value="{tp.get('output', 0)}">
 <span class=mute>（0 = 不计入预算；按 OpenAI 价格页填）</span></p>
-</div></div><button class="p">保存</button></form></div>"""
-        return page("设置", body)
+</section></div><button class="p">保存设置</button></form>"""
+        return page("设置", body, desc="管理模型、出图质量、预算和人脸规则。")
 
     @app.post("/settings")
     async def save_settings(request: Request):
@@ -709,9 +793,9 @@ ERP 列名可在 config.yaml 的 erp_columns 改。</p><button class="p">导出<
                      ("time", "sku_id", "variant", "slot", "attempt", "model", "quality", "cost_usd", "latency_s", "status")) + "</tr>"
                      for r in reversed(rows[-200:]))
         n_today = sum(1 for r in rows if r["time"].startswith(today) and r["status"] == "ok")
-        body = f"""<div class="card"><h2>账本</h2><p>今天成功调用 {n_today} 次，花费 ${spent():.3f}。完整记录：{E(core.ledger.path)}</p>
-<table><tr><th>时间</th><th>SKU</th><th>变体</th><th>图位</th><th>次</th><th>模型</th><th>画质</th><th>费用$</th><th>秒</th><th>结果</th></tr>{tr}</table></div>"""
-        return page("账本", body)
+        body = f"""<div class="card"><h2>账本</h2><p>今天成功调用 {n_today} 次，花费 ${spent():.3f}。这里保留最近 200 条调用记录。</p>
+<div class="table-scroll"><table><tr><th>时间</th><th>SKU</th><th>变体</th><th>图位</th><th>次</th><th>模型</th><th>画质</th><th>费用$</th><th>秒</th><th>结果</th></tr>{tr or "<tr><td colspan=10 class=empty>暂无调用记录。</td></tr>"}</table></div></div>"""
+        return page("账本", body, desc="查询出图和模型调用记录。")
 
     app.state.core = core
     return app

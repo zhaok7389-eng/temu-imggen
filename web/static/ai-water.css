@@ -1,0 +1,4 @@
+.ai-water-card video{position:absolute;inset:0;width:100%;height:100%;display:block;object-fit:cover;opacity:0}
+.ai-water-card.engaged.playing video{opacity:1}
+.ai-water-card.engaged .motion-sheen{display:none;animation:none}
+@media(prefers-reduced-motion:reduce){.ai-water-card video{display:none}}

@@ -1,0 +1,58 @@
+/* Fixed reference plates define the hit geometry. Lifted art is separate, so hidden edges are restored. */
+[data-motion]{isolation:isolate}
+.motion-targets,.motion-cards{position:absolute;inset:0;pointer-events:none}
+.motion-targets{z-index:5}
+.motion-cards{z-index:4}
+.hero-copy,.example-title,.caption{z-index:6}
+.motion-hit{position:absolute;margin:0;padding:0;pointer-events:auto;appearance:none;background:none;border:0;cursor:zoom-in}
+.motion-hit:focus-visible{outline:none;background:#fff2;box-shadow:inset 0 0 0 4px #fff}
+.motion-card{
+ position:absolute;left:var(--cx);top:var(--cy);width:var(--w);height:var(--h);
+ transform:translate(-50%,-50%) rotate(var(--rot)) scale(.93);
+ opacity:0;overflow:hidden;visibility:hidden;isolation:isolate;
+ outline:1px solid #f4ddba7a;box-shadow:0 18px 48px #000b,0 3px 16px #0008;
+ transition:opacity 155ms ease,visibility 155ms,transform 320ms cubic-bezier(.22,.76,.24,1);
+}
+.motion-card.engaged{
+ z-index:9;visibility:visible;opacity:1;
+ transform:translate(-50%,-56%) rotate(0deg) scale(1.07);
+ transition:none;animation:card-spring 510ms both;
+}
+[data-motion=features] .motion-card.engaged{transform:translate(-50%,-55%) rotate(0deg) scale(1.05)}
+.motion-card img{width:100%;height:100%;display:block;object-fit:cover}
+.motion-sheen{position:absolute;inset:0;opacity:0;pointer-events:none}
+.engaged .motion-sheen{opacity:1}
+@keyframes card-spring{
+ 0%{opacity:.55;transform:translate(-50%,-50%) rotate(var(--rot)) scale(.94);animation-timing-function:cubic-bezier(.16,.77,.26,1)}
+ 56%{opacity:1;transform:translate(-50%,-58%) rotate(0deg) scale(1.105);animation-timing-function:cubic-bezier(.31,.05,.5,1)}
+ 79%{transform:translate(-50%,-55%) rotate(0deg) scale(1.057);animation-timing-function:ease-out}
+ 100%{transform:translate(-50%,-56%) rotate(0deg) scale(1.07)}
+}
+[data-effect=window] .motion-sheen{
+ background:linear-gradient(132deg,transparent 24%,#1d10082b 32%,transparent 44%,#ffd0a32b 56%,transparent 70%);
+ background-size:200% 210%;mix-blend-mode:soft-light;
+}
+[data-effect=window].engaged .motion-sheen{animation:window-pass 3.5s .12s ease-in-out infinite alternate}
+[data-effect=water] .motion-sheen{
+ background:repeating-radial-gradient(ellipse at 68% 45%,transparent 0 10%,#b4dfff3e 12%,transparent 15%,transparent 22%);
+ background-size:146% 134%;mix-blend-mode:soft-light;filter:blur(2px)
+}
+[data-effect=water].engaged .motion-sheen{animation:caustics 3.4s ease-in-out infinite alternate}
+[data-effect=bottle] .motion-sheen,[data-effect=metal] .motion-sheen{
+ background:linear-gradient(100deg,transparent 43%,#fff3ee40 49%,#ffdfb530 51%,transparent 58%);
+ background-size:250% 100%;mix-blend-mode:screen
+}
+[data-effect=bottle].engaged .motion-sheen{animation:glass-sweep 4.1s .15s ease-in-out infinite}
+[data-effect=metal].engaged .motion-sheen{animation:glass-sweep 3.4s .05s ease-in-out infinite}
+[data-effect=box] .motion-sheen,[data-effect=silk] .motion-sheen{
+ background:radial-gradient(ellipse at 65% 36%,#ffe4c936,transparent 63%);
+ mix-blend-mode:screen
+}
+[data-effect=box].engaged .motion-sheen,[data-effect=silk].engaged .motion-sheen{animation:breathe 3.5s ease-in-out infinite alternate}
+[data-effect=silk].engaged img{animation:silk 4s ease-in-out infinite alternate}
+@keyframes window-pass{from{background-position:95% 85%}to{background-position:15% 25%}}
+@keyframes caustics{from{background-position:6% 27%;transform:scale(1.04)}to{background-position:89% 53%;transform:scale(1.12)}}
+@keyframes glass-sweep{0%,12%{background-position:100% 50%}66%,100%{background-position:0% 50%}}
+@keyframes breathe{from{opacity:.1;transform:translateX(6%)}to{opacity:.75;transform:translateX(-5%)}}
+@keyframes silk{from{transform:scale(1)}to{transform:scale(1.027)}}
+@media(prefers-reduced-motion:reduce){.motion-card,.motion-card.engaged,.motion-card.engaged img,.motion-card.engaged .motion-sheen{animation:none!important;transition:none!important}.motion-card.engaged .motion-sheen{opacity:0}}

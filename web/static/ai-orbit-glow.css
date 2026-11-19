@@ -1,0 +1,78 @@
+/* Ambient light only: the reference art and all interactive layers stay put. */
+.orbit-ambient {
+ position: absolute;
+ inset: 0;
+ z-index: 1;
+ overflow: hidden;
+ pointer-events: none;
+}
+.orbit-ambient::before,
+.orbit-ambient::after {
+ content: "";
+ position: absolute;
+ width: var(--glow-width);
+ height: var(--glow-height);
+ top: var(--glow-top);
+ background: radial-gradient(ellipse closest-side, var(--glow-color) 0%, transparent 100%);
+ animation: orbit-light-drift var(--glow-time) ease-in-out infinite alternate;
+}
+.orbit-ambient::before {
+ --glow-color: rgb(255 101 34 / 23%);
+ --glow-angle: 27deg;
+ --glow-time: 17s;
+ --glow-x: 6%;
+ --glow-y: 8%;
+ left: var(--glow-edge);
+}
+.orbit-ambient::after {
+ --glow-color: rgb(61 59 255 / 25%);
+ --glow-angle: -21deg;
+ --glow-time: 23s;
+ --glow-x: -7%;
+ --glow-y: -8%;
+ right: var(--glow-edge);
+ animation-delay: -9s;
+}
+.hero > .orbit-ambient::before {
+ --glow-width: 60%;
+ --glow-height: 24%;
+ --glow-top: 10%;
+ --glow-edge: -25%;
+}
+.hero > .orbit-ambient::after {
+ --glow-width: 46%;
+ --glow-height: 15%;
+ --glow-top: 33%;
+ --glow-edge: -19%;
+}
+.examples > .orbit-ambient::before,
+.examples > .orbit-ambient::after {
+ --glow-width: 36%;
+ --glow-height: 35%;
+ --glow-top: -3%;
+ --glow-edge: -14%;
+ --glow-color: rgb(255 101 34 / 16%);
+}
+.examples > .orbit-ambient::after { --glow-color: rgb(61 59 255 / 18%); }
+.features > .orbit-ambient::before {
+ --glow-width: 33%;
+ --glow-height: 44%;
+ --glow-top: 14%;
+ --glow-edge: -15%;
+ --glow-color: rgb(255 101 34 / 17%);
+}
+.features > .orbit-ambient::after {
+ --glow-width: 31%;
+ --glow-height: 35%;
+ --glow-top: 12%;
+ --glow-edge: -3%;
+ --glow-color: rgb(61 59 255 / 19%);
+}
+@keyframes orbit-light-drift {
+ from { transform: translate(0, 0) rotate(var(--glow-angle)); opacity: .38; }
+ to { transform: translate(var(--glow-x), var(--glow-y)) rotate(var(--glow-angle)); opacity: .88; }
+}
+@media (prefers-reduced-motion: reduce) {
+ .orbit-ambient { display: none; }
+}
+.showcase-note{font-size:12px;color:#9e9da7;text-align:center;padding:16px 12px 20px}
