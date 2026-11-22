@@ -90,5 +90,23 @@ button,.btn{color:var(--ink);background:#22242c;border:1px solid #393c48;border-
 .suite-plan-row{padding-block:6px}
 .suite-shot{width:clamp(50px,6vw,88px)}
 .field-search{width:min(100%,190px)!important}
+.product-actions{display:flex;align-items:center;gap:8px;white-space:nowrap}
+.product-actions form{margin:0}
+button.danger{color:var(--bad);background:transparent;border-color:#604142}
+button.danger:hover{background:#362225;border-color:#9d5b5e}
+.label-form-body{max-height:60dvh;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-right:8px;min-width:0}
+.label-section{margin-bottom:12px;min-width:0}
+.label-section>summary{padding:10px 0;cursor:pointer;font-weight:600}
+.label-lines-scroll{max-height:32dvh;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.label-lines-scroll thead th{position:sticky;top:0;z-index:1;background:#22232a}
+.label-form-actions{display:flex;justify-content:flex-end;padding-top:14px;border-top:1px solid var(--line);margin-top:10px}
+.suite-label-detail>.card{max-height:48dvh;overflow:auto;overscroll-behavior:contain;overflow-wrap:anywhere}
+.suite-claims ul{max-height:160px;overflow:auto;overscroll-behavior:contain;overflow-wrap:anywhere}
+.label-confirmation .cols2>div{min-width:0}
+.label-confirmation{display:flex;flex-direction:column;max-height:calc(100dvh - 210px);min-height:0}
+.label-confirmation>form{display:flex;flex-direction:column;min-height:0}
+.label-confirmation .label-form-body{min-height:0;flex:1 1 auto}
+.label-confirmation .label-form-actions{flex:none}
+.cell .review-photo img{aspect-ratio:1;object-fit:contain}
 .section-top form:has(.field-search){flex-wrap:nowrap}
 @media(max-width:460px){.suite-shot{width:42px}.section-top form:has(.field-search){max-width:100%}.field-search{min-width:0}}

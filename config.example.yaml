@@ -10,7 +10,7 @@ generation:
   size: 1024x1024
   route_label_heavy: false        # 第二轮实测：flare + 标签原文块即可；sunburst 只用于修复
   label_heavy_model: gpt-image-2.5-sunburst
-text_model: auto                  # 识别标签、做计划用的文本/视觉模型；auto = 账号里最新的
+text_model: auto                  # 识别标签、做计划用的文本/视觉模型；auto = 优先选兼容图片识别与结构化结果的模型
 est_usd_per_image: 0.026          # 只用于预估（实测 2.5-flare medium）
 pricing_usd_per_million_tokens:   # 出图单价，OpenAI 改价时更新
   text_input: 5

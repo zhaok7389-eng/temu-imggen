@@ -39,6 +39,10 @@ function pollJobs(sku){
   let wasRunning=false;
   const tick=()=>fetch('/api/jobs'+(sku?'?sku='+encodeURIComponent(sku):'')).then(r=>r.json()).then(js=>{
     const run=js.filter(j=>j.state==='running');
+    const flash=document.querySelector('.flash');
+    if(flash && flash.textContent.includes('正在识别标签') && js[0]?.kind==='识别标签' && js[0].state!=='running'){
+      flash.textContent=js[0].state==='error'?'识别失败，请查看任务错误信息后重试。':'标签识别已完成。';
+    }
     box.innerHTML=js.slice(0,6).map(j=>`<div class="j">${j.kind} ${j.variant||''} · ${j.done}/${j.total} · ${j.state==='running'?'进行中…':j.state==='done'?'<span class=okc>完成</span>':'<span class=err>'+esc(j.error)+'</span>'}</div>`).join('')||'<span class=mute>没有进行中的任务</span>';
     if(wasRunning && run.length===0){location.reload()}
     wasRunning = run.length>0;
@@ -167,15 +171,16 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         poll = f"<script>pollJobs({json.dumps(sku or '')})</script>"
         trail = crumb or "工作台"
         sub = f'<p class="eyebrow">{E(desc)}</p>' if desc else ""
+        css_version = (WEB / "static" / "studio.css").stat().st_mtime_ns
         return HTMLResponse(f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{E(title)} · Temu 主图工作台</title>
-<link rel="stylesheet" href="/static/studio.css"><script>{JS}</script></head><body>
+<link rel="stylesheet" href="/static/studio.css?v={css_version}"><script>{JS}</script></head><body>
 <div class="shell"><aside class="sidebar"><a class="brand" href="/" aria-label="返回首页"><img src="/static/assets/mark.png" alt="">主图工作台</a>
 <p class="nav-label">制作流程</p><nav class="snav" aria-label="制作流程">{nav}</nav>
 <div class="sidebar-foot"><nav class="snav" aria-label="工作台管理">{settings}{ledger}</nav><p>{mode}</p></div></aside>
 <main id="main"><header class="pagehead"><div><p class="crumb">{trail}</p><h1>{E(title)}</h1>{sub}</div>{actions}</header>
 {body}<details class="jobline"><summary>后台任务</summary><div id="jobs" aria-live="polite"></div></details></main></div>
-<div id="modal"></div>{poll}</body></html>""")
+<div id="modal"></div>{poll}</body></html>""", headers={"Cache-Control": "no-store"})
 
     def back(url: str, msg: str = "") -> RedirectResponse:
         if msg:
@@ -210,7 +215,8 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         counts: dict[str, int] = {}
         for sid in st.list_skus():
             s = st.sku(sid)
-            stat = st.status(sid, core.jobs.busy(sid))
+            busy = core.jobs.busy(sid)
+            stat = st.status(sid, busy)
             counts[stat] = counts.get(stat, 0) + 1
             if (status and stat != status) or (q.strip().casefold() not in f'{s.get("name", "")} {sid}'.casefold()):
                 continue
@@ -221,12 +227,24 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             rows.append(f'<tr><td><a class="lib-pair" href="/sku/{E(sid)}">{thumb}<span><b>{E(s.get("name"))}</b>'
                         f'<span class="mute" style="display:block">{E(sid)}</span></span></a></td>'
                         f'<td><span class="tag {cls}">{E(stat)}</span></td><td>{E(s.get("category") or "—")}</td>'
-                        f'<td>${sku_cost(sid):.3f}</td><td><a class="btn" href="/sku/{E(sid)}">打开</a></td></tr>')
+                        f'<td>${sku_cost(sid):.3f}</td><td><div class="product-actions"><a class="btn" href="/sku/{E(sid)}">打开</a>'
+                        f'<form method="post" action="/sku/{E(sid)}/delete"><button class="danger" {"disabled" if busy else ""}'
+                        f' aria-label="删除商品 {E(s.get("name"))}">删除</button></form></div></td></tr>')
         def filter_link(key, label):
             url = "/library" + ("?" + urllib.parse.urlencode({k:v for k,v in {"status":key,"q":q}.items() if v}) if key or q else "")
             return f'<a class="btn" href="{E(url)}" aria-current="{"true" if key == status else "false"}">{label}</a>'
         filt = filter_link("", f"全部 {sum(counts.values())}") + " ".join(filter_link(k,f"{E(k)} {v}") for k,v in counts.items())
-        body = f"""{flash(request)}
+        deleted = request.query_params.get("deleted", "")
+        undo = ""
+        if deleted:
+            try:
+                removed = st.sku(deleted)
+            except ValueError:
+                removed = {}
+            if removed.get("deleted_at"):
+                undo = (f'<div class="card row" role="status">已删除商品「{E(removed.get("name"))}」。'
+                        f'<form method="post" action="/sku/{E(deleted)}/restore"><button>撤销删除</button></form></div>')
+        body = f"""{flash(request)}{undo}
 <div class="card flat"><div class="row section-top"><h2>商品列表</h2>
 <form action="/library" method="get" class="row"><input type="hidden" name="status" value="{E(status)}">
 <input type="search" name="q" class="field-search" aria-label="搜索商品" placeholder="搜索商品名或 SKU" value="{E(q)}"><button>搜索</button></form></div>
@@ -240,6 +258,24 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 <div id="pick"></div></section>"""
         return page("产品库", body, desc="查找商品、导入原图，或继续上一次的制作。",
                     actions='<a class="btn p" href="#drop-area">导入商品</a>')
+
+    @app.post("/sku/{sku_id}/delete")
+    def delete_product(sku_id: str):
+        if core.jobs.busy(sku_id):
+            return back("/library", "商品还有任务进行中，请完成后再删除")
+        try:
+            core.store.delete_sku(sku_id)
+        except (ValueError, FileNotFoundError):
+            return HTMLResponse("没有这个商品", status_code=404)
+        return back("/library?" + urllib.parse.urlencode({"deleted": sku_id}))
+
+    @app.post("/sku/{sku_id}/restore")
+    def restore_product(sku_id: str):
+        try:
+            core.store.restore_sku(sku_id)
+        except (ValueError, FileNotFoundError):
+            return HTMLResponse("没有这个商品", status_code=404)
+        return back("/library", "商品已恢复")
 
     @app.post("/sku")
     async def new_sku(name: str = Form(...), files: list[UploadFile] = File(...)):
@@ -320,7 +356,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     def sku_page(request: Request, sku_id: str, edit: int = 0):
         st = core.store
         s = st.sku(sku_id)
-        if not s:
+        if not s or s.get("deleted_at"):
             return back("/library", "没有这个 SKU")
         sources = st.sources(sku_id)
         busy = core.jobs.busy(sku_id)
@@ -401,10 +437,14 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                          for c in cands)
         cat = "".join(f'<option {"selected" if d.get("category") == c else ""}>{c}</option>' for c in CATS)
         ocr_note = "" if d.get("ocr_available", True) else '<p class="mute">本地 OCR 未安装，没有第二路核对，请逐行对照原图。</p>'
-        return f"""<div class="card"><h2>第 2 步 · 确认标签文字</h2>
+        return f"""<div class="card label-confirmation"><h2>第 2 步 · 确认标签文字</h2>
 <p>逐行对照原图。改的是<b>识别错误</b>；包装上本来的错字（比如 “Replenis h”）<b>要原样保留</b>。黄色行请重点看。删掉一行：把文字清空。</p>{ocr_note}
 <form method="post" action="/sku/{E(sku_id)}/label"><input type="hidden" name="n" value="{len(lines)}">
-<table><tr><th>文字（原样）</th><th>字号</th><th>验收大字</th></tr>{''.join(rows)}</table>
+<div class="label-form-body" style="max-height:420px;max-height:min(46vh,420px);overflow-y:auto" tabindex="0" role="region" aria-label="标签识别结果">
+<details class="label-section" open><summary>包装文字 · {len(d.get('lines', []))} 行</summary>
+<div class="label-lines-scroll" style="max-height:280px;max-height:min(30vh,280px);overflow-y:auto" tabindex="0" role="region" aria-label="包装文字逐行核对">
+<table><thead><tr><th>文字（原样）</th><th>字号</th><th>验收大字</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div></details>
+<details class="label-section"><summary>商品信息、卖点与用法</summary>
 <div class="cols2" style="margin-top:12px"><div>
 <p>品名（原样）<input type="text" name="product_name" value="{E(d.get('product_name'))}"></p>
 <p>容量（原样，可空；空则不出尺寸图）<input type="text" name="capacity" value="{E(d.get('capacity'))}"></p>
@@ -417,7 +457,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 <p><b>勾选可以用作卖点文案的说法</b>（图上新加的英文只能来自这里、品名、容量、件数、用法）</p>{claims}
 <p>其他卖点（每行一个，必须是包装上写了的意思；不能有数字、百分比、医疗说法）<textarea name="extra_claims"></textarea></p>
 <p>用法步骤（每行一个，最多 3 行，会印在使用方法图上；可空）<textarea name="usage_steps">{E(chr(10).join(d.get('usage_steps', [])))}</textarea></p>
-</div></div><button class="p">确认标签</button></form></div>"""
+</div></div></details></div><div class="label-form-actions"><button class="p">确认标签</button></div></form></div>"""
 
     def variants_block(sku_id: str, busy: bool, active: str = "") -> str:
         st = core.store
@@ -748,7 +788,7 @@ ERP 列名可在 config.yaml 的 erp_columns 改。</p><button class="p" type="s
 <input type="text" name="heavy_model" value="{E(g['label_heavy_model'])}"><span class=mute>（第二轮实测：默认 flare 即可，sunburst 只在修复时用，所以默认关闭）</span></p>
 </section><section class="card settings-section"><h2>模型与规则</h2>
 <p>文本/视觉模型（识别标签、做计划）<input type="text" name="text_model" value="{E(c.get('text_model', 'auto'))}">
-<span class=mute>auto = 自动选账号里最新的。</span> {model_link}</p>{opts}
+<span class=mute>auto = 优先选择兼容图片识别和结构化结果的模型。</span> {model_link}</p>{opts}
 <p><label><input type="checkbox" name="faces_all" {'checked' if f.get('allow_full_face') else ''}> 所有类目都允许 AI 完整人脸</label></p>
 <p>只在这些类目允许人脸（逗号分隔）<input type="text" name="faces_cats" value="{E(','.join(f.get('categories') or []))}">
 <span class=mute>人脸只用于场景图（图位 6），首图仍以产品为主。</span></p>

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from .config import load_config
 from .gen.generate import Blocked, BudgetExceeded, GenRequest, Generator
@@ -220,11 +220,19 @@ class App:
             if len(prompts) == 1:
                 gen.run(GenRequest(prompt=prompts[0], out_path=paths["gen"], **common))
             else:   # how-to: one image per step, then composed with numbers and captions
+                # Each photo is natively 1:3, matching its final panel. Generating
+                # square photos first would require cropping away hands/products.
+                common["size"] = "512x1536"
                 parts = []
                 for k, pr in enumerate(prompts, 1):
                     pp = paths["gen"].with_name(f"{slot}_{n}_step{k}.png")
                     if not pp.exists():          # resume without paying twice
-                        gen.run(GenRequest(prompt=pr, out_path=pp, **common))
+                        framing = ("Native 1:3 tall portrait photograph for one full-height panel of a three-step guide. "
+                                   "Compose the product and hand action vertically to fill this narrow frame. "
+                                   "Keep the entire product and important hand action inside the frame; "
+                                   "show exactly ONE product container, never duplicate the jar or bottle; "
+                                   "no square inset, no multiple panels, no blank top/bottom bands. ")
+                        gen.run(GenRequest(prompt=framing + pr, out_path=pp, **common))
                     parts.append(pp)
                 caps = [x.get("caption", "") for x in plan["slots"][str(slot)].get("steps", [])]
                 compose_steps(parts, caps, paths["gen"])
@@ -294,13 +302,15 @@ class App:
 
 
 def compose_steps(parts: list[Path], captions: list[str], out: Path, size: int = 1024) -> None:
-    """How-to slot: three step photos side by side, numbered, with confirmed captions (Pillow)."""
-    canvas = Image.new("RGB", (size, size), (247, 243, 238))
-    d = ImageDraw.Draw(canvas)
-    n = len(parts)
-    gap = 24
-    w = (size - gap * (n + 1)) // n
-    top = (size - w) // 2 - 40
+    """Three full-height portrait steps, never a fourth product-reference tile."""
+    if len(parts) != 3:
+        raise ValueError("A how-to image requires exactly three step photos")
+    canvas = Image.new("RGB", (size, size), "white")
+    d = ImageDraw.Draw(canvas, "RGBA")
+    gap = 2 * max(1, round(size * 0.004))
+    width = (size - gap * 2) // 3
+    boxes = [(k * (width + gap), 0, size if k == 2 else k * (width + gap) + width, size)
+             for k in range(3)]
 
     def font(sz):
         for f in ("/System/Library/Fonts/Supplemental/Arial Bold.ttf", "/System/Library/Fonts/Helvetica.ttc",
@@ -309,27 +319,41 @@ def compose_steps(parts: list[Path], captions: list[str], out: Path, size: int =
                 return ImageFont.truetype(f, sz)
             except OSError:
                 pass
-        return ImageFont.load_default()
-    fnum, fcap = font(34), font(30)
-    for k, p in enumerate(parts):
-        im = Image.open(p).convert("RGB").resize((w, w))
-        x = gap + k * (w + gap)
-        canvas.paste(im, (x, top))
-        cx, cy, r = x + 34, top + 34, 24
-        d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(255, 255, 255))
-        d.text((cx, cy), str(k + 1), fill=(40, 40, 40), font=fnum, anchor="mm")
-        cap = captions[k] if k < len(captions) else ""
-        lines, cur = [], ""
-        for word in cap.split():           # wrap to the panel width
-            t = (cur + " " + word).strip()
-            if d.textlength(t, font=fcap) <= w - 10 or not cur:
-                cur = t
-            else:
-                lines.append(cur)
-                cur = word
-        if cur:
-            lines.append(cur)
-        for i, ln in enumerate(lines[:3]):
-            d.text((x + w // 2, top + w + 40 + i * 36), ln, fill=(40, 40, 40), font=fcap, anchor="mm")
+        return ImageFont.load_default(size=sz)
+
+    for tile, (p, (x0, y0, x1, y1)) in enumerate(zip(parts, boxes), 1):
+        with Image.open(p) as src:
+            im = ImageOps.exif_transpose(src).convert("RGBA")
+            bg = Image.new("RGBA", im.size, "white")
+            bg.alpha_composite(im)
+            im = ImageOps.fit(bg.convert("RGB"), (x1 - x0, y1 - y0), Image.Resampling.LANCZOS)
+        canvas.paste(im, (x0 + (x1 - x0 - im.width) // 2, y0 + (y1 - y0 - im.height) // 2))
+        pad = max(8, round(size * 0.02))
+        radius = max(14, round(size * 0.025))
+        cx, cy = x0 + pad + radius, y0 + pad + radius
+        d.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill=(255, 255, 255, 238))
+        d.text((cx, cy), str(tile), fill=(28, 44, 55, 255), font=font(round(size * 0.03)), anchor="mm")
+        cap = captions[tile - 1].strip() if tile - 1 < len(captions) else ""
+        if not cap:
+            continue
+        # Shrink to fit all confirmed copy; never invent or silently truncate it.
+        for fs in range(max(12, round(size * 0.026)), 5, -1):
+            fcap = font(fs)
+            lines, cur = [], ""
+            for char in cap:
+                if cur and (char == "\n" or d.textlength(cur + char, font=fcap) > x1 - x0 - pad * 2):
+                    lines.append(cur.rstrip())
+                    cur = ""
+                if char != "\n":
+                    cur += char
+            if cur:
+                lines.append(cur.rstrip())
+            if len(lines) * (fs + 6) <= (y1 - y0) * 0.25:
+                break
+        height = len(lines) * (fs + 6) + pad
+        d.rectangle((x0, y1 - height, x1, y1), fill=(16, 28, 39, 200))
+        for i, line in enumerate(lines):
+            d.text((x0 + pad, y1 - height + pad // 2 + i * (fs + 6)), line,
+                   fill="white", font=fcap)
     out.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(out)

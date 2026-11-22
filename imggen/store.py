@@ -69,7 +69,21 @@ class Store:
         return d
 
     def list_skus(self) -> list[str]:
-        return sorted(p.name for p in (self.root / "skus").iterdir() if (p / "sku.json").exists())
+        return sorted(p.name for p in (self.root / "skus").iterdir()
+                      if (p / "sku.json").exists() and not read_json(p / "sku.json").get("deleted_at"))
+
+    def delete_sku(self, sku_id: str) -> None:
+        """Hide a product reversibly; retain source photos, results and ledger identity."""
+        if not self.sku(sku_id):
+            raise FileNotFoundError(sku_id)
+        self.update_sku(sku_id, deleted_at=now())
+
+    def restore_sku(self, sku_id: str) -> None:
+        if not self.sku(sku_id):
+            raise FileNotFoundError(sku_id)
+        data = self.sku(sku_id)
+        data.pop("deleted_at", None)
+        write_json(self.sku_dir(sku_id) / "sku.json", data)
 
     def create_sku(self, name: str, files: list[tuple[str, bytes]], category: str = "") -> str:
         base = slug(name)

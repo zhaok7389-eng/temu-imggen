@@ -42,8 +42,9 @@ slots:
     copy: steps
     # 每格单独生成，再由程序拼成 3 格并加编号和说明文字（实测：一次出多格会乱码）
     step_prompt: >-
-      Square close-up photo for step {step_no} of a skincare routine: {action}. Only hands are
-      visible, no face. The product is clearly visible. {style} No added text.
+      Tall portrait close-up photo for step {step_no} of a skincare routine: {action}. Only hands are
+      visible, no face. Show exactly one product container; never duplicate the jar or bottle.
+      The product is clearly visible. {style} No added text.
   - id: 6
     name: 场景图
     copy: none

@@ -13,7 +13,7 @@ from pathlib import Path
 from .gen.ledger import Ledger
 
 _SKIP = ("image", "audio", "realtime", "tts", "transcribe", "embedding", "search", "moderation",
-         "dall", "whisper", "sora", "codex", "computer")
+         "dall", "whisper", "sora", "codex", "computer", "live", "instruct", "deep-research", "-pro")
 
 
 def list_text_models(client) -> list[str]:
@@ -31,6 +31,11 @@ def pick_text_model(cfg: dict, client) -> str:
     ms = list_text_models(client)
     if not ms:
         raise RuntimeError("账号里没有可用的文本模型，请在设置页手动填写")
+    # Prefer a known image-input + JSON Chat Completions model. Creation date
+    # alone does not indicate endpoint or modality compatibility.
+    for stable in ("gpt-4.1", "gpt-4o"):
+        if stable in ms:
+            return stable
     full = [x for x in ms if "mini" not in x and "nano" not in x]
     return (full or ms)[0]
 

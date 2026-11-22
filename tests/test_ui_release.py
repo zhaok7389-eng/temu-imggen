@@ -19,7 +19,8 @@ def test_landing_and_packaged_assets(tmp_path):
         response = client.get("/"+route)
         assert response.status_code == 200 and "sidebar" in response.text
         assert 'aria-current="page"' in response.text
-        assert 'href="/static/studio.css"' in response.text
+        assert 'href="/static/studio.css?v=' in response.text
+        assert response.headers['cache-control'] == 'no-store'
     for f in ("style.css", "hd.css", "motion.css", "ai-water.css", "ai-orbit-glow.css", "ai-orbit.js", "studio.css",
               "assets/mark.png", "assets/hd/hero.webp", "assets/hd/examples-field.webp",
               "assets/hd/scenes.webp", "assets/hd/details.webp"):
