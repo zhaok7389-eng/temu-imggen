@@ -39,6 +39,7 @@
   let jobs = [];
   let products = [];
   let capacity = {};
+  let generationMode = '';
   let costs = null;
   let selected = null;
   let variant = '';
@@ -65,6 +66,8 @@
   const productFor = id => products.find(product => product.id === id);
   const item = () => productFor(selected);
   const currentSlot = () => item()?.slots.find(slot => slot.id === activeSlot);
+  const canTrialFirst = product => product.hasConfirmedLabel && !product.activeJobs.length &&
+    product.slots.some(slot => slot.id === 1 && slot.raw && !slot.skip && !slot.busy);
   const budget = () => Number(capacity.budget_usd_per_day);
   const spent = () => Number(capacity.spent_today_usd);
   const budgetExceeded = () => Number.isFinite(budget()) && spent() >= budget();
@@ -105,6 +108,11 @@
   }
 
   function renderTop() {
+    const service = $('#service-mode');
+    const serviceLabel = {live: '真实出图', demo: '演示模式', unconfigured: '设置出图服务'}[generationMode];
+    service.textContent = serviceLabel || '';
+    service.dataset.mode = generationMode;
+    service.hidden = !serviceLabel;
     const {
       running_sets: running, queued_sets: queued, images_last_minute: minute, images_per_minute: limit,
       use_ratio: ratio
@@ -291,11 +299,11 @@
     const copyBusy = busyActions.has(product.id) || product.activeJobs.some(job => job.kind === '卖点提炼');
     const copyError = copyErrors.get(product.id) || (copyJob?.state === 'error' ? displayError(copyJob.error) : '');
     const key = JSON.stringify([product.id, product.variant, product.stage, product.error, product.archive,
-      activeSlot, split, compareMode, versionIndex, referenceOnly, showRedo, reviewArchived, budgetExceeded(),
+      activeSlot, split, compareMode, versionIndex, referenceOnly, showRedo, reviewArchived, budgetExceeded(), generationMode,
       product.slots.map(slot => [slot.status, slot.versionKey, slot.image, slot.busy, slot.error, slot.flags]),
       currentDetails?.label?.confirmed_at, currentDetails?.label_draft?.transcribed_at,
       currentDetails?.product_copy?.id, currentDetails?.product_copy?.state, copyError, copyBusy,
-      busyActions.has(`${product.id}:${product.variant}:${activeSlot}`)]);
+      busyActions.has(`${product.id}:${product.variant}:${activeSlot}`), canTrialFirst(product)]);
     if (!force && key === focusSignature) return;
     if (!force && (editingFocus() || showRedo && focus.querySelector('.proof-redo'))) {
       if (budgetExceeded()) focus.querySelectorAll('[data-action="submit-redo"], [data-action="confirm-label"], [data-action="extract-copy"]')
@@ -337,9 +345,17 @@
       ? `<label class="focus-variant">套图 <select id="focus-variant">${product.variantNames.map(name =>
         `<option value="${escape(name)}"${name === product.variant ? ' selected' : ''}>${escape(name)}</option>`).join('')}</select></label>`
       : `套图 ${escape(product.variant)}`;
+    const trial = canTrialFirst(product) && !isLabelMode(product);
+    const estimate = Number(capacity.est_usd_per_image);
+    const trialTitle = generationMode === 'demo' ? '生成一张演示首图' :
+      Number.isFinite(estimate) ? `只生成首图 01，预计 $${estimate.toFixed(3)}` : '只生成首图 01';
     focus.innerHTML = `<header class="focus-head"><div><h2>${escape(product.name)}</h2>
       <small>${escape(product.id)} · ${variantOptions}</small></div>
-      <div>${stageLabel(product)} <button type="button" class="button slim" data-action="close-focus" aria-label="关闭焦点面板">关闭</button></div></header>
+      <div class="focus-tools">${stageLabel(product)}${trial ? `<button type="button" class="button slim trial-first"
+        data-action="trial-first" title="${escape(trialTitle)}"
+        ${budgetExceeded() || !['live', 'demo'].includes(generationMode) || busyActions.has(`${product.id}:${product.variant}:1`) ? 'disabled' : ''}>
+        ${generationMode === 'demo' ? '演示首图 · 1 张' : '试出首图 · 1 张'}</button>` : ''}
+      <button type="button" class="button slim" data-action="close-focus" aria-label="关闭焦点面板">关闭</button></div></header>
       <section class="focus-inner">${inside}</section>`;
     renderedSlot = slotKey;
     [...focus.querySelectorAll(redoInputs)].forEach((input, index) => {
@@ -447,6 +463,7 @@
       jobs = recent;
       const oldSpend = spent();
       capacity = board.capacity || {};
+      generationMode = board.generation_mode || '';
       rows = normalizeRows(board, jobs);
       rebuildProducts();
       if (!boardLoaded) {
@@ -662,6 +679,23 @@
     });
   }
 
+  function trialFirst() {
+    const product = item();
+    if (!product || !canTrialFirst(product) || !['live', 'demo'].includes(generationMode)) return;
+    return runAction(`${product.id}:${product.variant}:1`, async () => {
+      requireBudget();
+      await post('/api/review', {sku: product.id, variant: product.variant, slot: 1, action: 'trial-first'});
+      if (selected === product.id && item()?.variant === product.variant) {
+        activeSlot = 1;
+        resetProof();
+        if (filter === 'done') filter = 'all';
+        if (editingFocus()) document.activeElement.blur();
+      }
+      await refreshProduct(product.id);
+      toast('只提交了首图 01。完成后会更新到这个图位。');
+    });
+  }
+
   async function upload(images) {
     const files = [...images].filter(file => file?.type.startsWith('image/') ||
       /\.(?:png|jpe?g|webp|heic|heif|gif|bmp|tiff?)$/i.test(file?.name || ''));
@@ -709,6 +743,7 @@
     'continue-suite': () => startOrRetry('start'),
     'retry-label': () => startOrRetry('read-label'),
     'refresh-board': refreshBoard,
+    'trial-first': trialFirst,
     'submit-redo': () => reviewAction('redo'),
     'retry-slot': () => reviewAction('redo'),
     'approve': () => reviewAction('approve'),
@@ -742,7 +777,10 @@
     'zoom-label'(button) {
       const url = button.dataset.url || item()?.proofOriginal;
       if (!url) return;
-      $('#dialog-image').src = url;
+      const image = new Image();
+      image.alt = '包装原图';
+      image.src = url;
+      $('#dialog-image').replaceChildren(image);
       $('#image-dialog').showModal();
     },
     'add-label-line': button => reviseDraft('line', button),

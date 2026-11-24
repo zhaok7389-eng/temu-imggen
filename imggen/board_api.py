@@ -21,6 +21,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 
 from .archive import latest_folder
+from .config import api_key_present
 from .plan import check_text, text_lines, validate
 from .store import now, plan_slots, read_json, write_json
 
@@ -113,7 +114,9 @@ def register(app, core, furl):
         counts = {k: 0 for k in STAGES}
         for r in rows:
             counts[r["stage"]] += 1
+        mode = "demo" if core.cfg.get("demo_mode") else "live" if api_key_present() else "unconfigured"
         return JSONResponse({"products": rows, "counts": counts, "stages": STAGES, "capacity": capacity(),
+                             "generation_mode": mode,
                              "time": now()})
 
     @app.get("/api/sku/{sku_id}")

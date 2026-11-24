@@ -8,6 +8,7 @@ from datetime import date
 from fastapi.testclient import TestClient
 from PIL import Image
 
+import app as web
 from app import create_app
 from imggen.config import load_config
 
@@ -88,3 +89,24 @@ def test_start_conflicts_and_unknown_product(tmp_path):
     row = next(p for p in c.get("/api/board").json()["products"] if p["id"] == sku)
     assert row["stage"] == "new"
     assert c.post(f"/api/sku/{sku}/start", json={}).status_code == 409          # label not confirmed
+
+
+def test_trial_only_generates_the_hero(tmp_path, monkeypatch):
+    c, core = _client(tmp_path)
+    assert c.get("/api/board").json()["generation_mode"] == "demo"
+    sku = c.post("/api/intake", data={"name": "One Image Trial", "read_label": "0"},
+                 files=[("files", ("image.png", _png(), "image/png"))]).json()["sku"]
+    assert c.post(f"/api/sku/{sku}/confirm", json=LABEL).json()["ok"]
+    payload = {"sku": sku, "variant": "A", "slot": 1, "action": "trial-first"}
+    assert "首图计划" in c.post("/api/review", json=payload).json()["error"]
+    assert c.post(f"/sku/{sku}/plan/A", follow_redirects=False).status_code == 303
+    _settle(core)
+    assert "只支持首图" in c.post("/api/review", json=dict(payload, slot=2)).json()["error"]
+    with monkeypatch.context() as blocked:
+        blocked.setattr(web, "prompts_for_slot", lambda *args: ["first", "second"])
+        assert "需要多张图片" in c.post("/api/review", json=payload).json()["error"]
+    assert c.post("/api/review", json=payload).json()["job_id"]
+    _settle(core)
+    plan = c.get(f"/api/sku/{sku}").json()["variants"]["A"]
+    assert [slot["slot"] for slot in plan["slots"] if slot["current"]] == [1]
+    assert not list((tmp_path / "ws" / "成品").glob("**/*.jpg"))

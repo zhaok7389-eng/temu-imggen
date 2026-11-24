@@ -28,7 +28,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from imggen.config import ROOT, api_key_present, load_config
 from imggen.credentials import keychain_available, load_keychain_key, safe_error, save_keychain_key, validate_api_key
 from imggen.pipeline import App
-from imggen.plan import ingredient_names, panel_copy, validate
+from imggen.plan import ingredient_names, panel_copy, prompts_for_slot, validate
 from imggen.product_copy import COPY_TYPES
 from imggen.store import plan_slots, read_json
 
@@ -37,7 +37,7 @@ CATS = ["serum", "cream", "mask", "cleanser", "toner", "lip", "eye", "body", "ot
 SIZE_CN = {"big": "大", "medium": "中", "small": "小"}
 
 WEB = Path(__file__).resolve().parent / "web"
-APP_VERSION = "1.8.1"
+APP_VERSION = "1.8.2"
 
 
 def build_id() -> str:
@@ -796,12 +796,25 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             cur = st.current(sid, v, slot)
             pick = "gen" if cur and cur["file"] == cur["pasted"] else "pasted"
             st.set_review(sid, v, slot, pick=pick)
-        elif action == "redo":
+        elif action in {"redo", "trial-first"}:
             n = len(st.attempts(sid, v, slot))
             if n >= int(core.cfg.get("repair", {}).get("max_attempts_per_slot", 3)) + 3:
                 return JSONResponse({"error": f"这个图位已经出了 {n} 版，建议改计划里的文案/画面描述再试"})
             try:
-                jid = core.generate(sid, v, slots=[slot], notes={slot: d.get("note", "")})
+                if action == "trial-first":
+                    if slot != 1:
+                        raise ValueError("单张试图只支持首图 01。")
+                    label = st.label(sid)
+                    plan = st.plan(sid, v)
+                    if not label or not label.get("confirmed_at") or slot not in plan_slots(plan):
+                        raise ValueError("请先确认标签并准备好首图计划。")
+                    if len(prompts_for_slot(slot, plan, label, core.tpl, plan.get("faces", False))) != 1:
+                        raise ValueError("这个首图配置需要多张图片，无法用于单张试出。")
+                    if (not core.cfg.get("demo_mode") and not api_key_present()):
+                        raise ValueError("请先在设置中配置生成服务。")
+                    if spent() >= float(core.cfg["budget_usd_per_day"]):
+                        raise ValueError("今日预算已用完，暂不能试出首图。")
+                jid = core.generate(sid, v, slots=[slot], notes={slot: d.get("note", "") if action == "redo" else ""})
             except Exception as e:  # noqa: BLE001
                 return JSONResponse({"error": safe_error(e)})
             return JSONResponse({"ok": True, "job_id": jid})
