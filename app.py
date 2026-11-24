@@ -36,7 +36,7 @@ CATS = ["serum", "cream", "mask", "cleanser", "toner", "lip", "eye", "body", "ot
 SIZE_CN = {"big": "大", "medium": "中", "small": "小"}
 
 WEB = Path(__file__).resolve().parent / "web"
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.7.0"
 
 
 def build_id() -> str:
@@ -80,6 +80,15 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
 
     app.mount("/static", StaticFiles(directory=WEB / "static"), name="static")
+    from imggen.board_api import register as register_board_api
+    register_board_api(app, core, furl)
+
+    def approve(sid: str, v: str, slot: int) -> None:
+        """Approve = file the image in workspace/成品 at once (no ZIP step needed)."""
+        from imggen.archive import archive_slot
+        core.store.set_review(sid, v, slot, status="approved")
+        archive_slot(core.store, core.cfg["workspace"], sid, v, slot,
+                     int(core.cfg.get("export_jpg_quality", 92)))
 
     @app.get("/")
     def home():
@@ -774,7 +783,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         if action in {"approve", "toggle"} and core.jobs.redo_for(sid, v, slot):
             return JSONResponse({"error": "这个图位正在重出，请等新图完成后审核。"})
         if action == "approve":
-            st.set_review(sid, v, slot, status="approved")
+            approve(sid, v, slot)
         elif action == "toggle":
             cur = st.current(sid, v, slot)
             pick = "gen" if cur and cur["file"] == cur["pasted"] else "pasted"
@@ -797,7 +806,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         for slot in plan_slots(plan):
             if (not core.jobs.redo_for(d["sku"], d["variant"], slot) and
                     core.store.current(d["sku"], d["variant"], slot)):
-                core.store.set_review(d["sku"], d["variant"], slot, status="approved")
+                approve(d["sku"], d["variant"], slot)
         return JSONResponse({"ok": True})
 
     @app.post("/api/review_clean")
@@ -811,7 +820,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                     cur = st.current(sid, v, slot)
                     if not core.jobs.redo_for(sid, v, slot) and cur and not cur["qa"].get("flags") and not cur["qa"].get("error") \
                             and rev.get(str(slot), {}).get("status") != "approved":
-                        st.set_review(sid, v, slot, status="approved")
+                        approve(sid, v, slot)
                         n += 1
         return JSONResponse({"n": n})
 
