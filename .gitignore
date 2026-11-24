@@ -8,8 +8,8 @@ __pycache__/
 .venv/
 .pytest_cache/
 # all product images, generated output and run data stay local, never in git
-workspace/
+/workspace
 *.zip
-.venv-app/
+/.venv-app
 .app-version
 .no-auto-update

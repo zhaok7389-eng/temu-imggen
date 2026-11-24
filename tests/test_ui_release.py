@@ -1,6 +1,9 @@
 """The source archive serves the entire reviewed UI on one origin, without a workspace."""
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
 
+import app as web
 from app import create_app, LOCAL_CLIPS
 from imggen.config import load_config
 
@@ -45,3 +48,18 @@ def test_landing_and_packaged_assets(tmp_path):
     (local/(LOCAL_CLIPS[0]+"-tight.mp4")).write_bytes(b"sample")
     assert 'data-local-clips="window"' in client.get("/showcase").text
     assert client.get("/showcase-media/window-tight.mp4").content == b"sample"
+
+
+def test_browser_opens_workbench_only_after_server_is_ready(monkeypatch):
+    server = SimpleNamespace(started=False)
+    opened = []
+
+    def become_ready(_seconds):
+        assert not opened
+        server.started = True
+
+    monkeypatch.setattr(web.time, "sleep", become_ready)
+    monkeypatch.setattr(web.webbrowser, "open", opened.append)
+    workbench = "http://127.0.0.1:8765/studio"
+    web.open_workbench_when_ready(server, workbench)
+    assert opened == [workbench]

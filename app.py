@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import threading
+import time
 import urllib.parse
 import webbrowser
 from datetime import date
@@ -36,7 +37,7 @@ CATS = ["serum", "cream", "mask", "cleanser", "toner", "lip", "eye", "body", "ot
 SIZE_CN = {"big": "大", "medium": "中", "small": "小"}
 
 WEB = Path(__file__).resolve().parent / "web"
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.8.1"
 
 
 def build_id() -> str:
@@ -1031,14 +1032,23 @@ def main():
     stored_key = load_keychain_key()
     if stored_key:
         os.environ["OPENAI_API_KEY"] = stored_key
-    url = f"http://127.0.0.1:{a.port}"
-    print("打开", url, "（关闭：在这个终端按 Ctrl+C）")
+    url = f"http://127.0.0.1:{a.port}/studio"
+    server = uvicorn.Server(uvicorn.Config(create_app(), host="127.0.0.1", port=a.port))
     if not a.no_browser:
-        try:
-            webbrowser.open(url)
-        except Exception:  # noqa: BLE001
-            pass
-    uvicorn.run(create_app(), host="127.0.0.1", port=a.port)
+        threading.Thread(target=open_workbench_when_ready, args=(server, url), daemon=True).start()
+    print("工作台", url, "（关闭：在这个终端按 Ctrl+C）", flush=True)
+    server.run()
+
+
+def open_workbench_when_ready(server, url: str) -> None:
+    for _ in range(100):
+        if server.started:
+            try:
+                webbrowser.open(url)
+            except (OSError, webbrowser.Error):
+                pass
+            return
+        time.sleep(0.1)
 
 
 if __name__ == "__main__":

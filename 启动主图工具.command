@@ -59,23 +59,40 @@ fail() {
   exit 1
 }
 
-# 1. 拿最新代码（没网或失败就跳过，不影响使用）
-#    这个文件夹是 git 下载的：以 GitHub 上的 main 为准。本地对代码的改动先自动备份
-#    （git stash，可找回），再更新；workspace/、config.yaml、.venv-app/ 不受影响。
-if [ -d .git ] && command -v git >/dev/null 2>&1 && [ "$1" != "--updated" ]; then
+STUDIO_URL="http://127.0.0.1:8765/studio"
+studio_running() {
+  curl -fsS --noproxy '*' --max-time 3 "$STUDIO_URL" 2>/dev/null | grep -q '珂学家电商套图工作台'
+}
+
+OLD_PID="$(lsof -nP -iTCP:8765 -sTCP:LISTEN -t 2>/dev/null | head -1)"
+if [ -n "$OLD_PID" ]; then
+  OLD_DIR="$(lsof -a -p "$OLD_PID" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+  if [ "$OLD_DIR" != "$(pwd -P)" ] || ! ps -o command= -p "$OLD_PID" 2>/dev/null | grep -Eq '(^|[ /])app\.py([[:space:]]|$)'; then
+    fail "8765 已被另一份本机程序占用，请先正常退出那份程序。"
+  fi
+  JOBS="$(curl -fsS --noproxy '*' --max-time 3 http://127.0.0.1:8765/api/jobs 2>/dev/null)"
+  [ -n "$JOBS" ] || fail "无法确认旧工作台是否有任务运行，请先正常退出旧工作台。"
+  if printf '%s' "$JOBS" | grep -Eq '"state"[[:space:]]*:[[:space:]]*"running"'; then
+    if studio_running; then open "$STUDIO_URL"; return; fi
+    fail "旧工作台仍有任务运行，等任务完成后再更新。"
+  fi
+fi
+
+# Git 更新只做快进，遇到本地文件冲突时由 Git 保留现状。
+if [ "$1" != "--updated" ] && command -v git >/dev/null 2>&1 \
+    && [ "$(git rev-parse --show-toplevel 2>/dev/null)" = "$(pwd -P)" ]; then
   say_step "检查更新"
   if git fetch --quiet origin main 2>/dev/null; then
-    if [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] && [ -z "$(git status --porcelain --untracked-files=no)" ]; then
+    if [ "$(git rev-parse HEAD)" = "$(git rev-parse FETCH_HEAD)" ]; then
       echo "已是最新"
-    else
-      if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
-        git stash push --quiet -m "启动更新前自动备份 $(date '+%Y-%m-%d %H:%M')" \
-          && echo "本地改过的代码已备份（git stash list 可查看）"
+    elif git merge --ff-only --no-overwrite-ignore --no-autostash FETCH_HEAD >/dev/null 2>&1; then
+      if [ "$(git rev-parse HEAD)" = "$(git rev-parse FETCH_HEAD)" ]; then
+        echo "已更新到最新版 $(git rev-parse --short HEAD)"
+        exec bash "$SELF" --updated
       fi
-      # reset 会覆盖挡路的未跟踪同名文件；然后确保停在 main 分支上
-      git reset --hard --quiet origin/main && git checkout --quiet -B main \
-        && chmod +x ./*.command && echo "已更新到最新版 $(git rev-parse --short HEAD)"
-      exec bash "$SELF" --updated      # 用新版启动文件继续
+      echo "当前代码有本地提交，继续使用当前版本"
+    else
+      echo "跳过更新（与本地代码冲突，已保留本地文件）"
     fi
   else
     echo "跳过更新（连不上 GitHub）"
@@ -84,32 +101,20 @@ elif [ "$1" != "--updated" ]; then
   update_from_github "$@"
 fi
 
-# 1b. 旧的工具窗口还开着（端口 8765 被占用）：如果占用的是本工具，先把它关掉再启动新版
-OLD_PID="$(lsof -nP -iTCP:8765 -sTCP:LISTEN -t 2>/dev/null | head -1)"
-if [ -n "$OLD_PID" ]; then
-  if ps -o command= -p "$OLD_PID" 2>/dev/null | grep -Eq "app\.py|uvicorn|temu-imggen"; then
-    say_step "关闭之前还在运行的主图工具"
-    kill "$OLD_PID" 2>/dev/null
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-      lsof -nP -iTCP:8765 -sTCP:LISTEN -t >/dev/null 2>&1 || break
-      sleep 0.5
-    done
-  else
-    fail "端口 8765 被别的程序占用（不是主图工具）。关掉那个程序，或重启电脑后再双击。"
-  fi
+if [ -n "$OLD_PID" ] && [ "$1" != "--updated" ] && studio_running; then
+  open "$STUDIO_URL"
+  return
 fi
 
-# 2. 第一次：安装 uv（装 Python 和依赖的工具）
-if ! command -v uv >/dev/null 2>&1; then
-  say_step "第一次使用：安装 uv（约 1 分钟）"
-  curl -LsSf https://astral.sh/uv/install.sh | sh || fail "安装 uv 失败，检查网络后再双击一次"
-  export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
-fi
-
-# 3. Python 3.12 环境 + 依赖（requirements 有变化时自动重装）
+# Python 3.12 环境和依赖（requirements 有变化时自动重装）
 STAMP=".venv-app/.installed"
 WANT="$(cat requirements.txt requirements-ocr.txt | shasum | cut -c1-12)"
 if [ ! -x .venv-app/bin/python ] || [ "$(cat "$STAMP" 2>/dev/null)" != "$WANT" ]; then
+  if ! command -v uv >/dev/null 2>&1; then
+    say_step "第一次使用：安装 uv（约 1 分钟）"
+    curl -LsSf https://astral.sh/uv/install.sh | sh || fail "安装 uv 失败，检查网络后再双击一次"
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+  fi
   say_step "安装 Python 3.12 和依赖（第一次约 3–5 分钟）"
   [ -x .venv-app/bin/python ] || uv venv --python 3.12 .venv-app || fail "创建 Python 环境失败"
   uv pip install --python .venv-app/bin/python -r requirements.txt || fail "安装依赖失败，检查网络后再双击一次"
@@ -118,8 +123,20 @@ if [ ! -x .venv-app/bin/python ] || [ "$(cat "$STAMP" 2>/dev/null)" != "$WANT" ]
   echo "$WANT" > "$STAMP"
 fi
 
-# 4. 启动。API key 可在工作台设置中保存到本机钥匙串。
-say_step "启动中… 浏览器会自动打开 http://127.0.0.1:8765"
+if [ -n "$OLD_PID" ]; then
+  JOBS="$(curl -fsS --noproxy '*' --max-time 3 http://127.0.0.1:8765/api/jobs 2>/dev/null)"
+  if [ -z "$JOBS" ] || printf '%s' "$JOBS" | grep -Eq '"state"[[:space:]]*:[[:space:]]*"running"'; then
+    fail "旧工作台有任务运行或无法核实，暂缓重启。"
+  fi
+  say_step "重启本目录的工作台"
+  kill "$OLD_PID" 2>/dev/null || fail "无法关闭旧工作台"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    lsof -nP -iTCP:8765 -sTCP:LISTEN -t >/dev/null 2>&1 || break
+    sleep 0.5
+  done
+fi
+
+say_step "启动中… 浏览器会自动打开 $STUDIO_URL"
 echo "用完直接关掉这个窗口即可。"
 .venv-app/bin/python app.py || fail "工具启动失败"
 }
