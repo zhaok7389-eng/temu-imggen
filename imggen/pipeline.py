@@ -9,20 +9,22 @@ from __future__ import annotations
 import os
 import threading
 import time
-import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageOps
 
 from .config import load_config
+from .copy_layout import compose_copy_panel, copy_block, copy_font
+from .credentials import OPENAI_BASE_URL, safe_error
 from .gen.generate import Blocked, BudgetExceeded, GenRequest, Generator
 from .gen.ledger import Ledger
 from .llm import LLM
-from .plan import build_plan, load_templates, prompts_for_slot, validate
+from .plan import build_plan, load_templates, panel_copy, prompts_for_slot, validate
+from .product_copy import apply_suggestions, checked_suggestions, sources_for, transfer_copy
 from .qa import label_text
 from .store import Store, now, plan_slots, read_json, write_json
 
@@ -34,7 +36,7 @@ def make_client(cfg: dict):
     if not os.getenv("OPENAI_API_KEY"):
         raise RuntimeError("没有设置 OPENAI_API_KEY。请在终端 export 后重启，或在设置里打开演示模式")
     from openai import OpenAI
-    return OpenAI()
+    return OpenAI(base_url=OPENAI_BASE_URL)
 
 
 def load_img(p: Path) -> np.ndarray:
@@ -56,11 +58,20 @@ class Jobs:
         self.jobs: dict[str, dict] = {}
         self.lock = threading.Lock()
 
-    def start(self, kind: str, sku_id: str, fn, total: int = 1, variant: str = "") -> str:
+    def start(self, kind: str, sku_id: str, fn, total: int = 1, variant: str = "",
+              slot: int | None = None) -> str:
         jid = uuid.uuid4().hex[:8]
-        job = dict(id=jid, kind=kind, sku=sku_id, variant=variant, total=total, done=0,
+        job = dict(id=jid, kind=kind, sku=sku_id, variant=variant, slot=slot, total=total, done=0,
                    state="running", error="", started=time.time())
         with self.lock:
+            for other in self.jobs.values():
+                if other["sku"] != sku_id or other["state"] != "running":
+                    continue
+                other_slot = other.get("slot")
+                if slot is None or other_slot is None:
+                    raise ValueError("这个商品已有任务正在运行，请等当前任务完成。")
+                if other["variant"] == variant and other_slot == slot:
+                    raise ValueError("这个图位正在重出，无需重复提交。")
             self.jobs[jid] = job
 
         def run():
@@ -69,16 +80,25 @@ class Jobs:
                 if job["state"] == "running":
                     job["state"] = "done"
             except Exception as e:  # noqa: BLE001
-                job["state"], job["error"] = "error", f"{type(e).__name__}: {e}"
-                traceback.print_exc()
+                job["error"] = safe_error(e)
+                job["state"] = "error"
         self.pool.submit(run)
         return jid
 
     def busy(self, sku_id: str) -> bool:
-        return any(j["sku"] == sku_id and j["state"] == "running" for j in self.jobs.values())
+        with self.lock:
+            return any(j["sku"] == sku_id and j["state"] == "running" for j in self.jobs.values())
 
     def recent(self, n: int = 30) -> list[dict]:
-        return sorted(self.jobs.values(), key=lambda j: -j["started"])[:n]
+        with self.lock:
+            ordered = sorted((j.copy() for j in self.jobs.values()), key=lambda j: -j["started"])
+            return [j for i, j in enumerate(ordered) if i < n or j["state"] == "running"]
+
+    def redo_for(self, sku_id: str, variant: str, slot: int) -> dict | None:
+        with self.lock:
+            return next((j.copy() for j in self.jobs.values() if j["sku"] == sku_id and
+                         j.get("variant") == variant and j.get("slot") == slot and
+                         j["state"] == "running"), None)
 
 
 # ---------------------------------------------------------------- app services
@@ -93,8 +113,11 @@ class App:
 
     def reload(self, cfg: dict):
         self.cfg = cfg
-        self._client = None
+        self.reset_client()
         self.gen_pool = ThreadPoolExecutor(max_workers=int(cfg.get("concurrency", 6)))
+
+    def reset_client(self):
+        self._client = None
 
     @property
     def client(self):
@@ -137,22 +160,99 @@ class App:
         write_json(self.store.sku_dir(sku_id) / "label.json", data)
         self.store.update_sku(sku_id, category=data.get("category", ""))
 
-    # ---- F3: plan --------------------------------------------------------
-    def make_plan(self, sku_id: str, variant: str) -> str:
+    def analyze_product_copy(self, sku_id: str, source: str) -> str:
+        label = self._confirmed_label(sku_id)
+        if not source or len(source) > 6000:
+            raise ValueError("请输入 1–6000 字的商品资料。")
+
         def run(job):
-            label = self.store.label(sku_id)
-            tpl = self.tpl
-            used = [self.store.plan(sku_id, v).get("style", {}) for v in self.store.variants(sku_id)
-                    if v != variant]
-            faces = self.faces_for(label)
-            out = self.llm().plan(sku_id, label, tpl["slots"]["slots"], used, faces)
-            plan = build_plan(variant, label, tpl["slots"]["slots"], out)
-            plan["issues"] = validate(plan, label, tpl["banned"]["words"])
-            plan["faces"] = faces
-            plan["created"] = now()
-            write_json(self.store.vdir(sku_id, variant) / "plan.json", plan)
+            path = self.store.sku_dir(sku_id) / "product_copy.json"
+            draft = {"id": job["id"], "source": source, "items": [], "state": "pending"}
+            write_json(path, draft)
+            if self.ledger.spent_today() >= float(self.cfg["budget_usd_per_day"]):
+                raise BudgetExceeded("今日预算已用完，已停止。")
+            evidence = sources_for(label, source)
+            result = self.llm().analyze_copy(sku_id, evidence)
+            draft["items"] = checked_suggestions(
+                result.get("items") if isinstance(result, dict) else None,
+                evidence, self.tpl["banned"]["words"],
+            )
+            draft["state"] = "ready"
+            write_json(path, draft)
+            job["done"] = 1
+
+        return self.jobs.start("卖点提炼", sku_id, run)
+
+    def use_product_copy(self, sku_id: str, draft_id: str, indices: list[str]) -> list[int]:
+        if self.jobs.busy(sku_id):
+            raise ValueError("这个商品仍有任务在运行，结束后再采用文案。")
+        before = self._confirmed_label(sku_id)
+        sku_dir = self.store.sku_dir(sku_id)
+        path = sku_dir / "product_copy.json"
+        draft = read_json(path, {})
+        if not draft_id or draft.get("id") != draft_id or draft.get("state") != "ready":
+            raise ValueError("文案草稿已更新，请刷新后再选择。")
+        selected = [row for i, row in enumerate(draft["items"]) if str(i) in indices]
+        selected = checked_suggestions(selected, sources_for(before, draft["source"]), self.tpl["banned"]["words"])
+        if not selected:
+            raise ValueError("请勾选至少一条有依据的文案。")
+        label = apply_suggestions(before, selected)
+        tpl = self.tpl
+        updates = {v: transfer_copy(self.store.plan(sku_id, v), label, selected, tpl)
+                   for v in self.store.variants(sku_id)}
+        write_json(sku_dir / "label.json", label)
+        for v, plan in updates.items():
+            write_json(self.store.vdir(sku_id, v) / "plan.json", plan)
+        draft.update(state="applied", applied_slots=sorted({r["slot"] for r in selected}))
+        write_json(path, draft)
+        return draft["applied_slots"]
+
+    # ---- F3: plan --------------------------------------------------------
+    def _make_plan(self, sku_id: str, variant: str, label: dict) -> dict:
+        tpl = self.tpl
+        used = [self.store.plan(sku_id, v).get("style", {}) for v in self.store.variants(sku_id)
+                if v != variant]
+        faces = self.faces_for(label)
+        out = self.llm().plan(sku_id, label, tpl["slots"]["slots"], used, faces)
+        plan = build_plan(variant, label, tpl["slots"]["slots"], out)
+        plan["issues"] = validate(plan, label, tpl["banned"]["words"])
+        plan["faces"] = faces
+        plan["created"] = now()
+        write_json(self.store.vdir(sku_id, variant) / "plan.json", plan)
+        return plan
+
+    def make_plan(self, sku_id: str, variant: str) -> str:
+        label = self._confirmed_label(sku_id)
+        self.store.vdir(sku_id, variant)
+
+        def run(job):
+            self._make_plan(sku_id, variant, label)
             job["done"] = 1
         return self.jobs.start("做计划", sku_id, run, variant=variant)
+
+    def _confirmed_label(self, sku_id: str) -> dict:
+        sku = self.store.sku(sku_id)
+        if not sku or sku.get("deleted_at"):
+            raise ValueError("没有这个商品。")
+        label = self.store.label(sku_id)
+        if not label or not label.get("confirmed_at"):
+            raise ValueError("请先确认商品标签。")
+        return label
+
+    def generate_suite(self, sku_id: str, variant: str) -> str:
+        label = self._confirmed_label(sku_id)
+        self.store.vdir(sku_id, variant)
+
+        def run(job):
+            plan = self.store.plan(sku_id, variant)
+            if plan is None:
+                if self.ledger.spent_today() >= float(self.cfg["budget_usd_per_day"]):
+                    raise BudgetExceeded("今日预算已用完，已停止。")
+                plan = self._make_plan(sku_id, variant, label)
+            todo = self._pending_slots(sku_id, variant, plan)
+            self._generate_slots(job, sku_id, variant, todo, {})
+
+        return self.jobs.start("生成套图", sku_id, run, total=1, variant=variant)
 
     def save_plan(self, sku_id: str, variant: str, plan: dict) -> list[str]:
         plan["issues"] = validate(plan, self.store.label(sku_id), self.tpl["banned"]["words"])
@@ -176,31 +276,49 @@ class App:
     def generate(self, sku_id: str, variant: str, slots: list[int] | None = None,
                  notes: dict | None = None) -> str:
         plan = self.store.plan(sku_id, variant)
-        if not plan:
-            raise ValueError("还没有计划")
-        if plan.get("issues"):
-            raise ValueError("计划里有文案问题，先改好再生成：" + "；".join(plan["issues"][:3]))
-        todo = slots or [s for s in plan_slots(plan) if not self.store.attempts(sku_id, variant, s)]
-        notes = notes or {}
+        todo = self._pending_slots(sku_id, variant, plan, slots)
+        redo_slot = todo[0] if slots and len(todo) == 1 else None
 
         def run(job):
-            job["total"] = len(todo)
-            gen = Generator(self.cfg, self.ledger, client=self.client)
-            futs = [self.gen_pool.submit(self._one_slot, gen, sku_id, variant, s, notes.get(s, ""))
-                    for s in todo]
-            errs = []
-            for f in futs:
-                try:
-                    f.result()
-                except BudgetExceeded as e:
-                    errs.append("今日预算已用完（%s 美元），已停止" % self.cfg["budget_usd_per_day"])
-                    del e
-                except Exception as e:  # noqa: BLE001
-                    errs.append(str(e)[:200])
-                job["done"] += 1
-            if errs:
-                job["state"], job["error"] = "error", "；".join(sorted(set(errs)))
-        return self.jobs.start("出图", sku_id, run, total=len(todo), variant=variant)
+            if redo_slot is not None:
+                self.store.set_review(sku_id, variant, redo_slot, status="redo",
+                                      note=(notes or {}).get(redo_slot, ""))
+            self._generate_slots(job, sku_id, variant, todo, notes or {})
+
+        return self.jobs.start("重出" if redo_slot is not None else "出图", sku_id, run,
+                               total=len(todo), variant=variant, slot=redo_slot)
+
+    def _pending_slots(self, sku_id: str, variant: str, plan: dict | None,
+                       slots: list[int] | None = None) -> list[int]:
+        if not plan:
+            raise ValueError("还没有计划")
+        if slots and not set(slots).issubset(plan_slots(plan)):
+            raise ValueError("这个图位未列入当前出图计划。")
+        target = {"slots": {str(s): plan["slots"][str(s)] for s in slots}} if slots else plan
+        issues = validate(target, self.store.label(sku_id) or {}, self.tpl["banned"]["words"])
+        if issues:
+            raise ValueError("计划里有文案问题，先改好再生成：" + "；".join(issues[:3]))
+        return slots or [s for s in plan_slots(plan) if not self.store.attempts(sku_id, variant, s)]
+
+    def _generate_slots(self, job: dict, sku_id: str, variant: str, todo: list[int], notes: dict):
+        job["total"] = len(todo)
+        if not todo:
+            return
+        gen = Generator(self.cfg, self.ledger, client=self.client)
+        futs = [self.gen_pool.submit(self._one_slot, gen, sku_id, variant, s, notes.get(s, ""))
+                for s in todo]
+        errs = []
+        for f in futs:
+            try:
+                f.result()
+            except BudgetExceeded:
+                errs.append("今日预算已用完（%s 美元），已停止" % self.cfg["budget_usd_per_day"])
+            except Exception as e:  # noqa: BLE001
+                errs.append(safe_error(e)[:200])
+            job["done"] += 1
+        if errs:
+            job["error"] = "；".join(sorted(set(errs)))
+            job["state"] = "error"
 
     def _one_slot(self, gen: Generator, sku_id: str, variant: str, slot: int, note: str):
         st = self.store
@@ -237,9 +355,16 @@ class App:
                 caps = [x.get("caption", "") for x in plan["slots"][str(slot)].get("steps", [])]
                 compose_steps(parts, caps, paths["gen"])
         except Blocked as e:
-            write_json(paths["qa"], {"error": "内容审核拦截：" + str(e)[:300], "prompt": prompts})
+            write_json(paths["qa"], {"error": "内容审核拦截：" + safe_error(e)[:300], "prompt": prompts})
             raise
         qa = self.check(sku_id, variant, slot, n)
+        planned_slot = plan["slots"][str(slot)]
+        heading, rows = panel_copy(planned_slot)
+        if heading or rows:
+            for path in (paths["gen"], paths["pasted"]):
+                if path.exists():
+                    compose_copy_panel(path, heading, rows, white=planned_slot["copy_layout"] == "capacity")
+            qa["rendered_copy"] = ([heading] if heading else []) + rows
         qa["prompt"] = prompts
         qa["model"] = model
         qa["sec"] = round(time.time() - t0, 1)
@@ -308,18 +433,13 @@ def compose_steps(parts: list[Path], captions: list[str], out: Path, size: int =
     canvas = Image.new("RGB", (size, size), "white")
     d = ImageDraw.Draw(canvas, "RGBA")
     gap = 2 * max(1, round(size * 0.004))
+    header = round(size * .08) if len(captions) == 3 and all(c.strip() for c in captions) else 0
     width = (size - gap * 2) // 3
-    boxes = [(k * (width + gap), 0, size if k == 2 else k * (width + gap) + width, size)
+    boxes = [(k * (width + gap), header, size if k == 2 else k * (width + gap) + width, size)
              for k in range(3)]
-
-    def font(sz):
-        for f in ("/System/Library/Fonts/Supplemental/Arial Bold.ttf", "/System/Library/Fonts/Helvetica.ttc",
-                  "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "C:/Windows/Fonts/arialbd.ttf"):
-            try:
-                return ImageFont.truetype(f, sz)
-            except OSError:
-                pass
-        return ImageFont.load_default(size=sz)
+    if header:
+        d.text((size // 2, header // 2), "HOW TO USE", fill=(28, 44, 55, 255),
+               font=copy_font(round(size * .042)), anchor="mm")
 
     for tile, (p, (x0, y0, x1, y1)) in enumerate(zip(parts, boxes), 1):
         with Image.open(p) as src:
@@ -332,28 +452,17 @@ def compose_steps(parts: list[Path], captions: list[str], out: Path, size: int =
         radius = max(14, round(size * 0.025))
         cx, cy = x0 + pad + radius, y0 + pad + radius
         d.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill=(255, 255, 255, 238))
-        d.text((cx, cy), str(tile), fill=(28, 44, 55, 255), font=font(round(size * 0.03)), anchor="mm")
+        d.text((cx, cy), str(tile), fill=(28, 44, 55, 255), font=copy_font(round(size * 0.03)), anchor="mm")
         cap = captions[tile - 1].strip() if tile - 1 < len(captions) else ""
         if not cap:
             continue
-        # Shrink to fit all confirmed copy; never invent or silently truncate it.
-        for fs in range(max(12, round(size * 0.026)), 5, -1):
-            fcap = font(fs)
-            lines, cur = [], ""
-            for char in cap:
-                if cur and (char == "\n" or d.textlength(cur + char, font=fcap) > x1 - x0 - pad * 2):
-                    lines.append(cur.rstrip())
-                    cur = ""
-                if char != "\n":
-                    cur += char
-            if cur:
-                lines.append(cur.rstrip())
-            if len(lines) * (fs + 6) <= (y1 - y0) * 0.25:
+        # Measure the confirmed copy and wrap before reducing its font size.
+        for fs in range(max(12, round(size * 0.026)), 0, -1):
+            block = copy_block(cap, fs, x1 - x0 - pad * 2)
+            if block.height <= (y1 - y0) * 0.30:
                 break
-        height = len(lines) * (fs + 6) + pad
+        height = block.height + pad
         d.rectangle((x0, y1 - height, x1, y1), fill=(16, 28, 39, 200))
-        for i, line in enumerate(lines):
-            d.text((x0 + pad, y1 - height + pad // 2 + i * (fs + 6)), line,
-                   fill="white", font=fcap)
+        block.draw(d, x0 + pad, y1 - height + pad // 2, "white")
     out.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(out)

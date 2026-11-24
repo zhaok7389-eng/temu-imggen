@@ -19,27 +19,36 @@ slots:
   - id: 2
     name: 卖点图
     copy: headline_bullets
+    layout: benefits
     max_bullets: 3
+    photo_prompt: >-
+      Square product benefit photograph. Keep the complete product centered and visually prominent,
+      with a clean styled setting. {style}
     prompt: >-
-      Square benefit image. Product on the right, large. On the left, headline "{headline}" in a
-      clean bold sans-serif, then short benefit lines with small check-mark icons: {bullets}.
-      {style} Generous spacing, text readable on a phone.
+      Square benefit image. Product on the right, large. On the left, headline "{headline}"
+      followed by only these approved short points: {bullets}. If none, leave the space blank.
+      {style}
   - id: 3
     name: 成分图
-    copy: headline
+    copy: ingredients
+    layout: ingredients
+    photo_prompt: >-
+      Square ingredient photograph. Show the product with only these confirmed ingredients as props:
+      {ingredients}. Keep props distinct and easy to identify. {style}
     prompt: >-
-      Square ingredient image. Product in the center, its key ingredient shown around it as fresh,
-      natural elements: {scene}. Headline "{headline}" at the top in a clean bold sans-serif.
-      {style}
+      Square ingredient image. Product in the center with confirmed ingredient props: {scene}.
+      Only this added headline is allowed: "{headline}". {style}
   - id: 4
     name: 质地特写
-    copy: none
+    copy: texture
+    layout: texture
     prompt: >-
       Square texture close-up. A generous swatch of the product's texture in the foreground:
       {scene}. The product stands sharp behind it. {style} No added text.
   - id: 5
     name: 使用方法
     copy: steps
+    confirmed_steps_only: true
     # 每格单独生成，再由程序拼成 3 格并加编号和说明文字（实测：一次出多格会乱码）
     step_prompt: >-
       Tall portrait close-up photo for step {step_no} of a skincare routine: {action}. Only hands are
@@ -47,13 +56,18 @@ slots:
       The product is clearly visible. {style} No added text.
   - id: 6
     name: 场景图
-    copy: none
+    copy: scene
+    layout: scene
     prompt: >-
       Square lifestyle image: {scene}. A hand holds the product naturally, label facing the camera.
       {people} {style} No added text.
   - id: 7
     name: 尺寸图
     copy: capacity
+    layout: capacity
+    photo_prompt: >-
+      Square size image. Plain pure white background, product centered and upright, soft shadow.
+      No measuring marks, diagrams, callouts or graphic elements.
     prompt: >-
       Square size image. Plain pure white background, product centered and upright, soft shadow.
       Only one line of added text below the product: "{capacity}". Nothing else.

@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64, time
 from dataclasses import dataclass
 from pathlib import Path
+from ..credentials import OPENAI_BASE_URL, safe_error
 from .ledger import Ledger, cost_usd
 
 
@@ -46,7 +47,7 @@ class Generator:
         self.cfg, self.ledger = cfg, ledger
         if client is None:
             from openai import OpenAI
-            client = OpenAI()          # reads OPENAI_API_KEY from the environment
+            client = OpenAI(base_url=OPENAI_BASE_URL)  # reads OPENAI_API_KEY from the environment
         self.client = client
 
     def _check_budget(self):
@@ -66,7 +67,7 @@ class Generator:
                 resp = self.client.images.edit(model=req.model, image=files, prompt=req.prompt,
                                                size=req.size, quality=req.quality, n=1)
             except Exception as e:  # noqa: BLE001 - classify below
-                msg = str(e)
+                msg = safe_error(e)
                 status = getattr(e, "status_code", None)
                 blocked = "moderation" in msg.lower() or "safety" in msg.lower()
                 self.ledger.add(**base, latency_s=round(time.time() - t, 1),

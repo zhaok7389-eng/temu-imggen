@@ -94,23 +94,7 @@ if [ ! -x .venv-app/bin/python ] || [ "$(cat "$STAMP" 2>/dev/null)" != "$WANT" ]
   echo "$WANT" > "$STAMP"
 fi
 
-# 4. API key：环境变量 > 钥匙串 > 弹窗问一次（存进钥匙串，不写进任何文件）
-if [ -z "$OPENAI_API_KEY" ]; then
-  OPENAI_API_KEY="$(security find-generic-password -s temu-imggen -a OPENAI_API_KEY -w 2>/dev/null)"
-fi
-if [ -z "$OPENAI_API_KEY" ]; then
-  KEY="$(osascript -e 'try' \
-    -e 'text returned of (display dialog "粘贴 OpenAI API key（只存进本机钥匙串，以后不再问）。\n\n没有 key 就点「先不用」，可以在设置里开演示模式。" default answer "" with hidden answer buttons {"先不用", "保存"} default button "保存" with title "Temu 主图工具")' \
-    -e 'on error' -e 'return ""' -e 'end try' 2>/dev/null)"
-  if [ -n "$KEY" ]; then
-    security add-generic-password -U -s temu-imggen -a OPENAI_API_KEY -w "$KEY" >/dev/null 2>&1 \
-      && echo "key 已存进钥匙串"
-    OPENAI_API_KEY="$KEY"
-  fi
-fi
-[ -n "$OPENAI_API_KEY" ] && export OPENAI_API_KEY
-
-# 5. 启动（浏览器自动打开）
+# 4. 启动。API key 可在工作台设置中保存到本机钥匙串。
 say_step "启动中… 浏览器会自动打开 http://127.0.0.1:8765"
 echo "用完直接关掉这个窗口即可。"
 .venv-app/bin/python app.py || fail "工具启动失败"

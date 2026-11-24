@@ -23,6 +23,7 @@ import re
 import shutil
 import stat
 import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -59,6 +60,7 @@ def slug(name: str) -> str:
 class Store:
     def __init__(self, root: str | Path):
         self.root = Path(root)
+        self._review_lock = threading.Lock()
         (self.root / "skus").mkdir(parents=True, exist_ok=True)
 
     # ---- SKUs -------------------------------------------------------------
@@ -173,11 +175,12 @@ class Store:
         return read_json(self.vdir(sku_id, v) / "review.json", {})
 
     def set_review(self, sku_id: str, v: str, slot: int, **kw) -> None:
-        r = self.review(sku_id, v)
-        cur = r.get(str(slot), {})
-        cur.update(kw, time=now())
-        r[str(slot)] = cur
-        write_json(self.vdir(sku_id, v) / "review.json", r)
+        with self._review_lock:
+            r = self.review(sku_id, v)
+            cur = r.get(str(slot), {})
+            cur.update(kw, time=now())
+            r[str(slot)] = cur
+            write_json(self.vdir(sku_id, v) / "review.json", r)
 
     def current(self, sku_id: str, v: str, slot: int) -> dict | None:
         """The image shown for a slot: latest attempt, pasted version unless the user picked the raw one."""

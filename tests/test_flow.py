@@ -47,6 +47,8 @@ def test_full_flow_demo(tmp_path):
                files=[("files", ("main.png", _product_png(), "image/png"))], follow_redirects=False)
     assert r.status_code == 303
     sku = r.headers["location"].split("/sku/")[1].split("?")[0]
+    assert "请先确认商品标签" in c.post(f"/sku/{sku}/suite/A").text
+    assert app.state.core.jobs.recent() == []
 
     c.post(f"/sku/{sku}/transcribe")
     js = _wait(c)
@@ -55,32 +57,44 @@ def test_full_flow_demo(tmp_path):
 
     form = {"n": "3", "t0": "Turmeric", "s0": "big", "big0": "on", "t1": "30ML / 1.0 FL.OZ", "s1": "small",
             "t2": "", "product_name": "Turmeric Serum", "capacity": "30ML / 1.0 FL.OZ", "pieces": "1",
-            "category": "serum", "key_ingredient": "", "texture": "orange serum drops",
+            "category": "serum", "key_ingredient": "Turmeric", "texture": "orange serum drops",
+            "texture_caption": "Lightweight serum texture",
             "claim": ["Moisturizing", "Smooth Skin"], "extra_claims": "Even Skin Tone",
             "usage_steps": "Cleanse face\nApply a few drops\nMassage gently"}
     c.post(f"/sku/{sku}/label", data=form)
     lab = app.state.core.store.label(sku)
     assert lab["big_text"] == ["Turmeric"] and "Even Skin Tone" in lab["allowed_claims"]
 
-    c.post(f"/sku/{sku}/plan/A")
-    _wait(c)
+    assert "一键生成套图" in c.get(f"/sku/{sku}").text
+    r = c.post(f"/sku/{sku}/suite/A", follow_redirects=False)
+    assert r.status_code == 303 and "job=" in r.headers["location"]
+    js = _wait(c)
+    assert js[0]["kind"] == "生成套图" and js[0]["state"] == "done", js
     plan = app.state.core.store.plan(sku, "A")
     assert plan["issues"] == [], plan["issues"]
     assert plan["slots"]["2"]["bullets"] and plan["slots"]["7"]["capacity"] == "30ML / 1.0 FL.OZ"
+    assert plan["slots"]["3"]["ingredient_labels"] == ["Turmeric"]
+    assert plan["slots"]["4"]["texture_caption"] == "Lightweight serum texture"
 
-    c.post(f"/sku/{sku}/generate/A")
-    js = _wait(c)
-    assert js[0]["state"] == "done", js
     st = app.state.core.store
     for slot in range(1, 9):
         assert st.current(sku, "A", slot) is not None, slot
+    assert st.current(sku, "A", 2)["qa"]["rendered_copy"] == [
+        "Turmeric Serum", "Moisturizing", "Smooth Skin", "Even Skin Tone"]
+    assert st.current(sku, "A", 3)["qa"]["rendered_copy"] == ["KEY INGREDIENTS", "Turmeric"]
+    assert st.current(sku, "A", 4)["qa"]["rendered_copy"] == ["Lightweight serum texture"]
     assert st.attempts(sku, "A", 5) == [1]          # how-to composed from 3 step images
     assert (st.vdir(sku, "A") / "attempts" / "5_1_step3.png").exists()
 
     # resume: generating again does not call anything for slots that have images
-    c.post(f"/sku/{sku}/generate/A")
+    with app.state.core.ledger.path.open() as ledger:
+        calls_before = len(ledger.readlines())
+    c.post(f"/sku/{sku}/suite/A")
     _wait(c)
     assert st.attempts(sku, "A", 1) == [1]
+    assert st.plan(sku, "A") == plan
+    with app.state.core.ledger.path.open() as ledger:
+        assert len(ledger.readlines()) == calls_before
 
     # review: redo one slot, approve the set
     assert c.post("/api/review", json={"sku": sku, "variant": "A", "slot": 3, "action": "redo", "note": "less props"}).json()["ok"]
@@ -112,6 +126,25 @@ def test_copy_rules():
     lab2 = dict(lab, allowed_claims=["Reduces 90% Wrinkles", "Cures Acne", "Clinically Proven"])
     assert any("数字" in x for x in check_text("Reduces 90% Wrinkles", lab2, banned, "bullet"))
     assert any("禁用词" in x for x in check_text("Clinically Proven", lab2, banned, "bullet"))
+
+
+def test_copy_plan_without_verified_details_never_invents_claims_or_use(tmp_path):
+    from imggen.plan import build_plan, load_templates, panel_copy, prompts_for_slot, validate
+
+    label = {"product_name": "Coffee Sea Salt Scrub", "allowed_claims": [],
+             "key_ingredient": "Coffee", "ingredient_names": ["Coffee", "Sea Salt"],
+             "texture": "A brown granular scrub"}
+    tpl = load_templates(tmp_path)
+    plan = build_plan("A", label, tpl["slots"]["slots"],
+                      {"bullet_claims": [0, 2], "step_actions": ["Invented step"] * 3})
+    assert panel_copy(plan["slots"]["2"]) == ("Coffee Sea Salt Scrub", [])
+    assert panel_copy(plan["slots"]["3"]) == ("KEY INGREDIENTS", ["Coffee", "Sea Salt"])
+    assert panel_copy(plan["slots"]["4"]) == ("", [])
+    assert plan["slots"]["5"]["skip"] and plan["slots"]["7"]["skip"]
+    assert validate(plan, label, []) == []
+    prompt, = prompts_for_slot(2, plan, label, tpl, False)
+    assert "No added text" in prompt
+    assert "Coffee Sea Salt Scrub" not in prompt
 
 
 def test_upload_grouping(tmp_path):
