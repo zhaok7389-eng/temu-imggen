@@ -36,7 +36,7 @@ CATS = ["serum", "cream", "mask", "cleanser", "toner", "lip", "eye", "body", "ot
 SIZE_CN = {"big": "大", "medium": "中", "small": "小"}
 
 WEB = Path(__file__).resolve().parent / "web"
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.8.0"
 
 
 def build_id() -> str:
@@ -80,6 +80,12 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
 
     app.mount("/static", StaticFiles(directory=WEB / "static"), name="static")
+
+    @app.get("/studio", include_in_schema=False)
+    def studio():
+        return FileResponse(WEB / "studio" / "index.html", headers={"Cache-Control": "no-store"})
+
+    app.mount("/studio", StaticFiles(directory=WEB / "studio"), name="studio-static")
     from imggen.board_api import register as register_board_api
     register_board_api(app, core, furl)
 
@@ -122,6 +128,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             current = ' aria-current="page"' if key == active else ""
             return f'<a href="{url}"{current}>{label}</a>'
         nav = "".join(item(*route) for route in routes)
+        studio_link = item("studio", "/studio", "新工作台")
         settings = item("settings", "/settings", "设置")
         ledger = item("ledger", "/ledger", "账本")
         if core.cfg.get("demo_mode"):
@@ -139,7 +146,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 <script src="/static/studio.js?v={js_version}" defer></script></head><body data-sku="{E(sku)}">
 <div class="shell"><aside class="sidebar"><a class="brand" href="/library"><img src="/static/assets/mark.png" alt="">主图工作台</a>
 <nav class="snav" aria-label="制作流程">{nav}</nav>
-<div class="sidebar-foot"><nav class="snav" aria-label="工作台管理">{settings}{ledger}</nav><div class="service-status">{mode}</div></div></aside>
+<div class="sidebar-foot"><nav class="snav" aria-label="工作台管理">{studio_link}{settings}{ledger}</nav><div class="service-status">{mode}</div></div></aside>
 <main id="main"><header class="pagehead"><div>{trail}<h1>{E(title)}</h1>{sub}</div>{actions}</header>
 <section id="production-progress" class="production-progress" aria-label="任务进度" hidden></section>
 {body}<details class="jobline"><summary>任务记录</summary><ul id="jobs"></ul></details></main></div>

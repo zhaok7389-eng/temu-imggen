@@ -11,6 +11,12 @@ def test_landing_and_packaged_assets(tmp_path):
     client = TestClient(create_app(cfg))
     home = client.get("/", follow_redirects=False)
     assert home.status_code == 307 and home.headers["location"] == "/library"
+    studio = client.get("/studio")
+    assert studio.status_code == 200 and "珂学家电商套图工作台" in studio.text
+    assert studio.headers["cache-control"] == "no-store"
+    for asset in ("studio.css", "header.css", "label.css", "proof.css", "studio.js", "data.js", "label.js",
+                  "proof.js", "assets/proof-source.webp"):
+        assert client.get(f"/studio/{asset}").status_code == 200
     landing = client.get("/showcase")
     assert landing.status_code == 200
     assert 'href="/library#drop-area"' in landing.text
@@ -22,6 +28,7 @@ def test_landing_and_packaged_assets(tmp_path):
         assert response.status_code == 200 and "sidebar" in response.text
         assert 'aria-current="page"' in response.text
         assert 'href="/static/studio.css?v=' in response.text
+        assert 'href="/studio">新工作台</a>' in response.text
         assert response.headers['cache-control'] == 'no-store'
     for f in ("style.css", "hd.css", "motion.css", "ai-water.css", "ai-orbit-glow.css", "ai-orbit.js", "studio.css",
               "assets/mark.png", "assets/hd/hero.webp", "assets/hd/examples-field.webp",

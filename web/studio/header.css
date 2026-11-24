@@ -1,0 +1,173 @@
+.topbar {
+  min-height: 64px;
+  gap: 16px;
+  background: linear-gradient(115deg, #faf3e7, #fcfaf5 46%);
+}
+
+.brand { gap: 10px; }
+.brand > b { font-weight: 740; letter-spacing: .005em; }
+.brand-mark {
+  width: 35px;
+  height: 35px;
+  flex: none;
+  background: linear-gradient(145deg, #b84b32, #96301e 78%);
+  border-radius: 7px 7px 11px 7px;
+  box-shadow: inset 0 0 0 1px #8f3627, inset 0 1px 1px #eab49d, 0 2px 4px #6e3f2a24;
+}
+.brand-mark i {
+  width: 15px;
+  height: 18px;
+  border-radius: 2px;
+  border-color: #ffe7ce;
+  transform: translate(-3px,-1px) rotate(-13deg);
+}
+.brand-mark i + i {
+  transform: translate(3px,0) rotate(9deg);
+  background: #a9422e;
+}
+.brand-mark i + i::after {
+  content: "";
+  position: absolute;
+  inset: 3px 2px 4px;
+  border-radius: 1px;
+  background: linear-gradient(135deg, #f9ddbb 58%, #e3a378 59%);
+}
+.market { letter-spacing: .055em; }
+
+.capacity { min-width: 0; gap: clamp(11px, 1.6vw, 24px); }
+.capacity-group {
+  grid-template-columns: 25px auto;
+  align-items: center;
+  gap: 8px;
+}
+.capacity-group + .capacity-group { padding-left: clamp(11px, 1.6vw, 24px); }
+.capacity-group small { display: block; margin-bottom: 2px; font-size: 11px; line-height: 1.25; }
+.capacity-group strong { font-size: 16px; }
+.capacity-mark {
+  width: 25px;
+  height: 25px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #e5d7c6;
+  border-radius: 6px;
+  background: #f6eee2;
+  color: #875437;
+}
+.capacity-mark i { display: block; position: relative; }
+.capacity-stack i {
+  height: 9px;
+  width: 12px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  transform: translate(-1px,-1px);
+}
+.capacity-stack i::after {
+  content: "";
+  position: absolute;
+  inset: 2px -4px -4px 2px;
+  border: solid currentColor;
+  border-width: 0 1px 1px 0;
+  border-radius: 0 0 2px 0;
+}
+.capacity-pace i {
+  width: 13px;
+  height: 8px;
+  border: 1px solid currentColor;
+  border-bottom: 0;
+  border-radius: 11px 11px 0 0;
+}
+.capacity-pace i::after {
+  content: "";
+  position: absolute;
+  width: 6px;
+  height: 1px;
+  left: 5px;
+  bottom: 0;
+  background: currentColor;
+  transform: rotate(-52deg);
+  transform-origin: left center;
+}
+.capacity-budget i {
+  width: 14px;
+  height: 10px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+}
+.capacity-budget i::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: -1px;
+  width: 5px;
+  height: 4px;
+  border: 1px solid currentColor;
+  border-radius: 2px 0 0 2px;
+  background: #f6eee2;
+}
+
+.workflow { background: #f9f5ed; }
+.workflow-phase {
+  grid-template-columns: 48px minmax(0,1fr);
+  gap: 10px;
+  padding: 7px 14px;
+  min-height: 54px;
+}
+.workflow-phase:hover:not(:disabled) { background: #f5eadc; }
+.workflow-phase[aria-current] { background: #f7e7da; box-shadow: inset 0 -2px var(--accent); }
+.phase-art {
+  display: block;
+  position: relative;
+  overflow: hidden;
+  width: 48px;
+  height: 37px;
+  border: 1px solid #cbb9a4;
+  border-radius: 3px;
+  background: #ead8be;
+}
+.phase-art img { width: 100%; height: 100%; object-fit: cover; object-position: center 53%; }
+.phase-art.material { padding: 2px; background: #fffbf3; }
+.phase-art.composition::after {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border: 1px dashed #fff4dfdc;
+  border-radius: 1px;
+}
+.phase-art.comparison img + img { position: absolute; inset: 0; clip-path: inset(0 0 0 51%); }
+.phase-art.comparison::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 51%;
+  width: 1px;
+  background: #fff8ec;
+  box-shadow: 0 0 3px #4a372a;
+}
+.phase-art.finished { padding: 2px 2px 4px; background: #fffbf3; box-shadow: 0 2px 0 -1px #e8d6bb; }
+.workflow-phase[aria-current] .phase-art { border-color: #ba6b51; }
+.phase-caption { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; line-height: 1.2; }
+.phase-caption strong { font-size: 14px; font-weight: 700; }
+.phase-caption small { text-align: left; }
+
+@media (max-width: 930px) {
+  .topbar { gap: 11px; }
+  .brand { font-size: 17px; }
+  .brand .market { display: none; }
+  .capacity-group { gap: 5px; }
+}
+
+@media (max-width: 680px) {
+  .topbar { min-height: 58px; gap: 4px 8px; }
+  .brand { gap: 7px; font-size: 15px; }
+  .brand-mark { width: 31px; height: 31px; }
+  .capacity { gap: 7px; }
+  .capacity-group { grid-template-columns: 1fr; }
+  .capacity-group + .capacity-group { padding-left: 7px; }
+  .capacity-group small, .capacity .quiet { font-size: 10px; }
+  .capacity-group strong { font-size: 13px; }
+  .capacity-mark { display: none; }
+  .workflow-phase { grid-template-columns: 1fr; justify-items: center; gap: 3px; padding: 4px 2px; }
+  .phase-art { width: 37px; height: 27px; }
+  .phase-caption { align-items: center; }
+  .phase-caption strong { font-size: 12px; }
+  .workflow-phase .phase-caption small { text-align: center; white-space: normal; font-size: 10px; }
+}

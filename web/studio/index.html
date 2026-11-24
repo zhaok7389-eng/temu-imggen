@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>珂学家电商套图工作台</title>
+<link rel="stylesheet" href="/studio/studio.css">
+<link rel="stylesheet" href="/studio/header.css">
+<link rel="stylesheet" href="/studio/label.css">
+<link rel="stylesheet" href="/studio/proof.css">
+<script defer src="/studio/label.js"></script>
+<script defer src="/studio/proof.js"></script>
+<script defer src="/studio/data.js"></script>
+<script defer src="/studio/studio.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"><i></i><i></i></span>
+    <b>珂学家电商套图工作台</b><span class="market">TEMU 美区</span>
+  </div>
+  <div id="capacity" class="capacity" aria-label="产能与今日费用"></div>
+  <details class="top-menu">
+    <summary>设置</summary>
+    <div class="menu-body">
+      <nav aria-label="工作台设置">
+        <a href="/settings" target="_blank" rel="noopener">工具设置</a>
+        <a href="/ledger" target="_blank" rel="noopener">费用账本</a>
+        <a href="/library" target="_blank" rel="noopener">产品库</a>
+      </nav>
+    </div>
+  </details>
+</header>
+<div id="budget-alert" class="budget-alert" hidden role="status"></div>
+<main class="workspace" id="workspace">
+  <nav class="workflow" id="workflow" aria-label="套图工序"></nav>
+  <aside class="intake" aria-label="上传及待办">
+    <div class="intake-content">
+      <div class="side-title"><h2>上传商品</h2></div>
+      <div class="drop" id="drop">
+        <span class="upload-mark" aria-hidden="true"></span>
+        <strong>拖入商品图片</strong>
+        <span class="quiet">1–4 张同一商品的图片</span>
+        <div class="drop-actions">
+          <button class="button" id="choose" type="button">选择图片</button>
+          <kbd>⌘ V</kbd>
+        </div>
+      </div>
+      <label class="sku-label"><span>商品名称</span><input id="sku-name" type="text" placeholder="选填，默认使用文件名" autocomplete="off"></label>
+      <input type="file" id="file-input" accept="image/*" multiple hidden>
+      <div class="action-head"><h2>需要我处理</h2><span id="todo-count" class="count">0</span></div>
+      <div id="todo-list" class="todo-list"></div>
+    </div>
+    <details class="shortcut-menu">
+      <summary>键盘快捷键</summary>
+      <dl><dt><kbd>⌘V</kbd></dt><dd>粘贴图片</dd><dt><kbd>⌘Enter</kbd></dt><dd>确认并开始</dd>
+        <dt><kbd>A</kbd> <kbd>R</kbd> <kbd>L</kbd></dt><dd>通过 / 重出 / 切换版本</dd>
+        <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>切换图位</dd><dt><kbd>J</kbd> <kbd>K</kbd></dt><dd>切换待办商品</dd>
+        <dt><kbd>空格</kbd></dt><dd>按住看包装原图</dd><dt><kbd>Esc</kbd></dt><dd>关闭焦点面板</dd></dl>
+    </details>
+  </aside>
+  <section class="board" aria-labelledby="board-title">
+    <header class="section-head">
+      <div class="head-label"><h1 id="board-title">生产板</h1><span class="quiet" id="board-count"></span></div>
+      <span id="board-connection" class="demo" role="status"></span>
+    </header>
+    <nav id="filters" class="filters" aria-label="筛选生产阶段"></nav>
+    <div id="board-content"><div class="board-empty"><h2>正在读取生产记录</h2></div></div>
+  </section>
+  <aside class="focus" id="focus" aria-label="当前商品"></aside>
+</main>
+<div id="feedback" role="status" class="toast" hidden></div>
+<dialog id="image-dialog" aria-labelledby="image-dialog-title">
+  <header><b id="image-dialog-title">包装原图</b><form method="dialog"><button class="button">关闭</button></form></header>
+  <img id="dialog-image" alt="包装原图">
+</dialog>
+</body>
+</html>

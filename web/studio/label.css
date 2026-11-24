@@ -1,0 +1,580 @@
+.lc-panel {
+  --mat: #efe9dd;
+  --form: #fdfbf6;
+  color: var(--ink);
+  font-size: 13px;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.lc-panel h3,
+.lc-panel p,
+.lc-panel figure,
+.lc-panel fieldset {
+  margin: 0;
+}
+
+.lc-section-head,
+.lc-reference figcaption,
+.lc-copy-actions,
+.lc-footer {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.lc-section-head {
+  justify-content: space-between;
+  margin-bottom: 7px;
+}
+
+.lc-section-head h3,
+.lc-specs h3,
+.lc-claims legend {
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.4;
+  font-weight: 660;
+}
+
+.lc-counter,
+.lc-panel small,
+.lc-field > span,
+.lc-lines-head,
+.lc-reference figcaption {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.lc-panel .lc-warning-text {
+  color: var(--warn);
+  font-weight: 650;
+}
+
+.lc-recognition {
+  display: grid;
+  grid-template-columns: minmax(108px, .57fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding-block: 8px;
+  border-block: 1px solid var(--line);
+}
+
+.lc-reference {
+  min-width: 0;
+}
+
+.lc-reference-button {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1 / 1.1;
+  max-height: 158px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--mat);
+  padding: 5px;
+  cursor: zoom-in;
+}
+
+.lc-reference-button:hover {
+  border-color: var(--accent);
+}
+
+.lc-reference-empty {
+  color: var(--muted);
+  cursor: default;
+}
+
+.lc-reference-empty:hover {
+  border-color: var(--line);
+}
+
+.lc-reference-button img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.lc-reference figcaption {
+  justify-content: space-between;
+  margin-top: 5px;
+  font-size: 11px;
+}
+
+.lc-reference figcaption button {
+  padding: 0;
+  border: 0;
+  font: inherit;
+  font-weight: 650;
+  color: var(--accent);
+  background: none;
+  cursor: pointer;
+}
+
+.lc-lines {
+  min-width: 0;
+  max-height: 183px;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.lc-label-editor {
+  min-width: 0;
+}
+
+.lc-lines-head,
+.lc-line-fields {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) 24px 24px;
+  align-items: center;
+  gap: 4px;
+}
+
+.lc-lines-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 1px 4px 4px;
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 630;
+}
+
+.lc-lines-head span:first-child,
+.lc-lines-head span:nth-child(3) {
+  text-align: center;
+}
+
+.lc-label-line {
+  padding: 3px 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.lc-label-line:last-child {
+  border-bottom-color: transparent;
+}
+
+.lc-mismatch {
+  background: #f8eedc;
+  box-shadow: inset 2px 0 var(--warn);
+}
+
+.lc-line-index {
+  color: var(--muted);
+  text-align: center;
+  font-size: 11px;
+}
+
+.lc-line-fields > input[type="checkbox"] {
+  justify-self: center;
+}
+
+.lc-line-fields > input:not([type="checkbox"]),
+.lc-claim-entry > input,
+.lc-field :is(input, select, textarea) {
+  width: 100%;
+  min-width: 0;
+  min-height: 27px;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--ink);
+  background: var(--form);
+  font: inherit;
+}
+
+.lc-line-fields > input:not([type="checkbox"]) {
+  padding-inline: 4px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 530;
+}
+
+.lc-line-fields > input:not([type="checkbox"]):hover,
+.lc-line-fields > input:not([type="checkbox"]):focus {
+  border-color: var(--line);
+  background: var(--form);
+}
+
+.lc-remove {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  min-height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  font-size: 17px;
+  cursor: pointer;
+}
+
+.lc-remove:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.lc-panel input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.lc-panel :is(input, select, textarea, button, summary):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.lc-lines input:not([type="checkbox"]):focus-visible {
+  outline-offset: -1px;
+}
+
+.lc-panel .lc-readback {
+  display: block;
+  padding: 0 0 2px 30px;
+  color: var(--warn);
+  font-size: 11px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.lc-warning {
+  margin-top: 7px;
+  padding: 4px 7px;
+  border-inline-start: 2px solid var(--warn);
+  color: var(--warn);
+  background: #f8eedc;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.lc-panel .lc-claims {
+  margin-top: 9px;
+  padding: 0;
+  border: 0;
+}
+
+.lc-claims legend {
+  margin-bottom: 4px;
+  padding: 0;
+}
+
+.lc-claims > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.lc-claim,
+.lc-candidate {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lc-claim {
+  min-width: 0;
+  padding-block: 2px;
+  font-size: 12px;
+}
+
+.lc-claim > span {
+  overflow-wrap: anywhere;
+}
+
+.lc-claims > .lc-claim-entry {
+  display: flex;
+  flex-wrap: nowrap;
+  max-width: 100%;
+  margin-top: 4px;
+  gap: 6px;
+}
+
+.lc-claim-entry > input {
+  flex: 1;
+  font-size: 12px;
+}
+
+.lc-claim-entry > button {
+  flex: none;
+}
+
+.lc-specs {
+  margin-top: 9px;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
+}
+
+.lc-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px 8px;
+  margin-top: 5px;
+}
+
+.lc-field {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.lc-field > span {
+  line-height: 15px;
+}
+
+.lc-field :is(input, select, textarea) {
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.lc-field textarea {
+  resize: vertical;
+}
+
+.lc-field :is(input, textarea)::placeholder,
+.lc-claim-entry > input::placeholder {
+  color: var(--muted);
+}
+
+.lc-wide {
+  grid-column: 1 / -1;
+}
+
+.lc-copy {
+  margin-top: 8px;
+  border-block: 1px solid var(--line);
+}
+
+.lc-extra {
+  margin-top: 5px;
+  border: 0;
+}
+
+.lc-extra[open] {
+  padding-bottom: 4px;
+}
+
+.lc-copy summary {
+  min-height: 31px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 650;
+  list-style: none;
+  cursor: pointer;
+}
+
+.lc-copy summary::-webkit-details-marker {
+  display: none;
+}
+
+.lc-copy summary::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-right: 1px solid var(--muted);
+  border-bottom: 1px solid var(--muted);
+  transform: rotate(-45deg);
+}
+
+.lc-copy[open] summary::before {
+  transform: rotate(45deg) translateY(-2px);
+}
+
+.lc-copy summary > small {
+  margin-inline-start: auto;
+  font-weight: 450;
+}
+
+.lc-copy-body {
+  padding: 3px 0 8px;
+}
+
+.lc-copy-actions {
+  flex-wrap: wrap;
+  justify-content: space-between;
+  margin-top: 5px;
+}
+
+.lc-file,
+.lc-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--ink);
+  background: var(--form);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.lc-add-line {
+  margin-top: 4px;
+}
+
+.lc-control:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+.lc-file > input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  width: 100%;
+  cursor: pointer;
+}
+
+.lc-file:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.lc-candidates {
+  display: grid;
+  gap: 5px;
+  padding-top: 7px;
+}
+
+.lc-candidate {
+  align-items: start;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--form);
+}
+
+.lc-candidate > input {
+  flex: none;
+  margin-block-start: 2px;
+}
+
+.lc-candidate :is(small, b) {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.lc-panel .lc-copy-kind {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.lc-panel :is(.lc-copy-note, .lc-copy-error) {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.lc-panel .lc-copy-error {
+  color: var(--warn);
+}
+
+.lc-adopt {
+  justify-self: start;
+}
+
+.lc-footer {
+  position: sticky;
+  bottom: 0;
+  flex-wrap: wrap;
+  padding-top: 8px;
+  margin-top: 3px;
+  background: var(--paper);
+}
+
+.lc-footer > p {
+  flex: 1 0 100%;
+  font-size: 12px;
+}
+
+.lc-confirm {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 35px;
+  padding: 5px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: white;
+  background: var(--accent);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.lc-confirm:not(:disabled):hover {
+  filter: brightness(.91);
+}
+
+.lc-confirm:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+.lc-quote {
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.lc-footer kbd {
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--muted);
+  background: var(--canvas);
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+@media (min-width: 1081px) {
+  .lc-panel {
+    display: flex;
+    flex-direction: column;
+    min-block-size: 100%;
+  }
+
+  .lc-recognition {
+    grid-template-columns: minmax(158px, 214px) minmax(0, 1fr);
+  }
+
+  .lc-reference-button {
+    aspect-ratio: 1;
+    max-height: none;
+  }
+
+  .lc-lines {
+    max-height: 180px;
+  }
+
+  .lc-label-line {
+    padding-block: 5px;
+  }
+
+  .lc-facts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .lc-footer {
+    margin-top: auto;
+    padding-top: 10px;
+  }
+}
