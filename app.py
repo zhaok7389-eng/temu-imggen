@@ -657,6 +657,55 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         return back(f"/sku/{sku_id}", "开始出图。每张约 30–60 秒，可以先去做别的 SKU")
 
     # ------------------------------------------------------------ F7 review wall
+    def review_cell(sid: str, v: str, slot: int, rev: dict, tpl_names: dict) -> str:
+        """One slot card on the review wall. Also served alone by /api/slot for in-place updates."""
+        st = core.store
+        cur = st.current(sid, v, slot)
+        r = rev.get(str(slot), {})
+        stt = r.get("status", "")
+        redo = core.jobs.redo_for(sid, v, slot)
+        redo_data = f' data-redo-id="{E(redo["id"])}"' if redo else ''
+        if cur is None:
+            busy = ('<div class="review-feedback mute" role="status">正在生成</div>'
+                    '<div class="progress-track" role="progressbar" aria-label="生成进度"><span></span></div>') if redo else ''
+            return (f'<div class="cell review-missing" data-sku="{E(sid)}" data-v="{v}" data-slot="{slot}" data-version=""{redo_data}>'
+                    f'<span class="eyebrow">图位 {slot:02}</span><div class="t">{E(tpl_names.get(slot))}</div>'
+                    f'<span class="tag warn">{"生成中" if redo else "待出图"}</span>{busy}</div>')
+        qa = cur["qa"]
+        flags = qa.get("flags", []) + ([qa["error"]] if qa.get("error") else [])
+        cls = "approved" if stt == "approved" else "redo" if stt == "redo" else "warn" if flags else ""
+        urls = [furl(st.sources(sid)[0]), furl(cur["gen"])] + ([furl(cur["pasted"])] if cur["pasted"] else [])
+        caps = ["产品原图", "生成版", "标签回贴版"][:len(urls)]
+        which = "回贴版" if cur["file"] == cur["pasted"] else "生成原图"
+        status_tag = {"approved": '<span class="tag ok">已通过</span>', "redo": '<span class="tag bad">待重出</span>'}.get(stt, '<span class="tag warn">待审核</span>')
+        compare = E("showBig(" + json.dumps(urls) + "," + json.dumps(caps, ensure_ascii=False) + ")")
+        disabled = " disabled" if redo else ""
+        tog = f'<button data-review-control{disabled} onclick="act(this,\'toggle\')" title="L">{"改用生成原图" if which == "回贴版" else "改用回贴版"}</button>' if cur["pasted"] else ""
+        relayout = (f'<button data-review-control{disabled} onclick="act(this,\'relayout\')" title="按计划里的文案重新排版，不重新出图、不花钱">重新排版</button>'
+                    if cur.get("layout") else "")
+        return (
+            f'<article class="cell {cls}" tabindex="0" data-sku="{E(sid)}" data-v="{v}" data-slot="{slot}" data-version="{E(cur["version"])}"{redo_data}>'
+            f'<button type="button" class="review-photo" onclick="{compare}" aria-label="对照原图：{E(tpl_names.get(slot))}">'
+            f'<img loading="lazy" src="{furl(cur["file"])}" alt=""></button>'
+            f'<div class="row section-top"><div class="t">{slot:02} · {E(tpl_names.get(slot))}</div>{status_tag}</div>'
+            f'<p class="mute">第 {cur["attempts"]} 版 · {which}</p>'
+            + "".join(f'<div class="f">{E(x)}</div>' for x in flags) +
+            f'<div class="row review-controls"><button data-review-control{disabled} onclick="act(this,\'approve\')" title="A">通过</button>'
+            f'<button data-review-control{disabled} onclick="act(this,\'redo\')" title="R">重出</button>{tog}{relayout}</div>'
+            '<form class="redo-editor" hidden><label>调整说明（选填）'
+            '<textarea name="note" placeholder="例如：包装正面朝向镜头"></textarea></label>'
+            '<div class="row"><button type="button" onclick="closeRedo(this)">取消</button>'
+            '<button class="p">确认重出</button></div></form>'
+            f'<div class="review-feedback mute" role="status">{"正在生成" if redo else ""}</div>'
+            f'<div class="progress-track" role="progressbar" aria-label="重出进度" {"" if redo else "hidden"}><span></span></div></article>')
+
+    def review_tally(sid: str, v: str) -> str:
+        plan = core.store.plan(sid, v)
+        rev = core.store.review(sid, v)
+        slots = plan_slots(plan)
+        ok = sum(1 for s in slots if rev.get(str(s), {}).get("status") == "approved")
+        return f"通过 {ok} / {len(slots)}"
+
     @app.get("/review", response_class=HTMLResponse)
     def review(request: Request, sku: str = "", show: str = "todo"):
         st = core.store
@@ -670,41 +719,9 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                 cells = []
                 n_ok = 0
                 for slot in plan_slots(plan):
-                    cur = st.current(sid, v, slot)
-                    r = rev.get(str(slot), {})
-                    stt = r.get("status", "")
-                    if stt == "approved":
+                    if rev.get(str(slot), {}).get("status") == "approved":
                         n_ok += 1
-                    if cur is None:
-                        cells.append(f'<div class="cell review-missing"><span class="eyebrow">图位 {slot:02}</span><div class="t">{E(tpl_names.get(slot))}</div><span class="tag warn">待出图</span></div>')
-                        continue
-                    qa = cur["qa"]
-                    flags = qa.get("flags", []) + ([qa["error"]] if qa.get("error") else [])
-                    cls = "approved" if stt == "approved" else "redo" if stt == "redo" else "warn" if flags else ""
-                    urls = [furl(st.sources(sid)[0]), furl(cur["gen"])] + ([furl(cur["pasted"])] if cur["pasted"] else [])
-                    caps = ["产品原图", "生成版", "标签回贴版"][:len(urls)]
-                    which = "回贴版" if cur["file"] == cur["pasted"] else "生成原图"
-                    status_tag = {"approved": '<span class="tag ok">已通过</span>', "redo": '<span class="tag bad">待重出</span>'}.get(stt, '<span class="tag warn">待审核</span>')
-                    compare = E("showBig(" + json.dumps(urls) + "," + json.dumps(caps, ensure_ascii=False) + ")")
-                    redo = core.jobs.redo_for(sid, v, slot)
-                    redo_data = f' data-redo-id="{E(redo["id"])}"' if redo else ''
-                    disabled = " disabled" if redo else ""
-                    tog = f'<button data-review-control{disabled} onclick="act(this,\'toggle\')" title="L">{"改用生成原图" if which == "回贴版" else "改用回贴版"}</button>' if cur["pasted"] else ""
-                    cells.append(
-                        f'<article class="cell {cls}" tabindex="0" data-sku="{E(sid)}" data-v="{v}" data-slot="{slot}"{redo_data}>'
-                        f'<button type="button" class="review-photo" onclick="{compare}" aria-label="对照原图：{E(tpl_names.get(slot))}">'
-                        f'<img loading="lazy" src="{furl(cur["file"])}" alt=""></button>'
-                        f'<div class="row section-top"><div class="t">{slot:02} · {E(tpl_names.get(slot))}</div>{status_tag}</div>'
-                        f'<p class="mute">第 {cur["attempts"]} 版 · {which}</p>'
-                        + "".join(f'<div class="f">{E(x)}</div>' for x in flags) +
-                        f'<div class="row review-controls"><button data-review-control{disabled} onclick="act(this,\'approve\')" title="A">通过</button>'
-                        f'<button data-review-control{disabled} onclick="act(this,\'redo\')" title="R">重出</button>{tog}</div>'
-                        '<form class="redo-editor" hidden><label>调整说明（选填）'
-                        '<textarea name="note" placeholder="例如：包装正面朝向镜头"></textarea></label>'
-                        '<div class="row"><button type="button" onclick="closeRedo(this)">取消</button>'
-                        '<button class="p">确认重出</button></div></form>'
-                        f'<div class="review-feedback mute" role="status">{"正在重出" if redo else ""}</div>'
-                        f'<div class="progress-track" role="progressbar" aria-label="重出进度" {"" if redo else "hidden"}><span></span></div></article>')
+                    cells.append(review_cell(sid, v, slot, rev, tpl_names))
                 if show == "todo" and n_ok == len(plan_slots(plan)):
                     continue
                 name = st.sku(sid).get("name", sid)
@@ -729,7 +746,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         d = await request.json()
         sid, v, slot, action = d["sku"], d["variant"], int(d["slot"]), d["action"]
         st = core.store
-        if action in {"approve", "toggle"} and core.jobs.redo_for(sid, v, slot):
+        if action in {"approve", "toggle", "relayout"} and core.jobs.redo_for(sid, v, slot):
             return JSONResponse({"error": "这个图位正在重出，请等新图完成后审核。"})
         if action == "approve":
             st.set_review(sid, v, slot, status="approved")
@@ -737,6 +754,11 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             cur = st.current(sid, v, slot)
             pick = "gen" if cur and cur["file"] == cur["pasted"] else "pasted"
             st.set_review(sid, v, slot, pick=pick)
+        elif action == "relayout":
+            try:
+                core.rerender(sid, v, slot)
+            except ValueError as e:
+                return JSONResponse({"error": str(e)})
         elif action == "redo":
             n = len(st.attempts(sid, v, slot))
             if n >= int(core.cfg.get("repair", {}).get("max_attempts_per_slot", 3)) + 3:
@@ -778,6 +800,28 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         js = [j for j in core.jobs.recent() if not sku or j["sku"] == sku]
         return JSONResponse([{k: j.get(k) for k in ("id", "kind", "sku", "variant", "slot", "total", "done", "state", "error")}
                              for j in js])
+
+    @app.get("/api/slot")
+    def api_slot(sku: str, variant: str, slot: int):
+        """One review card as HTML, for replacing it in place without reloading the page."""
+        st = core.store
+        if not st.sku(sku) or variant not in st.variants(sku):
+            return JSONResponse({"error": "没有这个图位"}, status_code=404)
+        tpl_names = {int(t["id"]): t["name"] for t in core.tpl["slots"]["slots"]}
+        return JSONResponse({"html": review_cell(sku, variant, slot, st.review(sku, variant), tpl_names),
+                             "tally": review_tally(sku, variant)})
+
+    @app.get("/api/slot_versions")
+    def api_slot_versions(sku: str):
+        """Version key per slot, so the page can tell which cards changed."""
+        st = core.store
+        out = {}
+        if st.sku(sku):
+            for v in st.variants(sku):
+                for slot in plan_slots(st.plan(sku, v)):
+                    cur = st.current(sku, v, slot)
+                    out[f"{v}:{slot}"] = cur["version"] if cur else ""
+        return JSONResponse(out)
 
     # ------------------------------------------------------------ F8 export
     @app.get("/export", response_class=HTMLResponse)

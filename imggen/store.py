@@ -8,8 +8,11 @@ workspace/
     label_draft.json         machine transcription waiting for confirmation
     variants/{V}/
       plan.json              style lock + copy per slot (F3)
-      attempts/{slot}_{n}.png          generated
-      attempts/{slot}_{n}_pasted.png   with the original label pasted back
+      attempts/{slot}_{n}.png          generated photo (never written over)
+      attempts/{slot}_{n}_pasted.png   photo with the original label pasted back (never written over)
+      attempts/{slot}_{n}.layout.json  copy layer: approved text and its placement
+      attempts/{slot}_{n}.final.png         photo + copy layer (rendered, can be re-rendered)
+      attempts/{slot}_{n}_pasted.final.png  pasted photo + copy layer
       attempts/{slot}_{n}.qa.json      checks (F5)
       review.json            user decisions per slot (F7)
   ledger.csv
@@ -169,7 +172,9 @@ class Store:
     def attempt_paths(self, sku_id: str, v: str, slot: int, n: int) -> dict:
         d = self.vdir(sku_id, v) / "attempts"
         return {"gen": d / f"{slot}_{n}.png", "pasted": d / f"{slot}_{n}_pasted.png",
-                "qa": d / f"{slot}_{n}.qa.json"}
+                "qa": d / f"{slot}_{n}.qa.json", "layout": d / f"{slot}_{n}.layout.json",
+                "gen_final": d / f"{slot}_{n}.final.png",
+                "pasted_final": d / f"{slot}_{n}_pasted.final.png"}
 
     def review(self, sku_id: str, v: str) -> dict:
         return read_json(self.vdir(sku_id, v) / "review.json", {})
@@ -183,7 +188,11 @@ class Store:
             write_json(self.vdir(sku_id, v) / "review.json", r)
 
     def current(self, sku_id: str, v: str, slot: int) -> dict | None:
-        """The image shown for a slot: latest attempt, pasted version unless the user picked the raw one."""
+        """The image shown for a slot: latest attempt, pasted version unless the user picked the raw one.
+
+        `gen` / `pasted` are what the user sees (finished artwork when the slot has copy);
+        `gen_photo` / `pasted_photo` are the untouched photos the copy layer is rendered on.
+        """
         ns = self.attempts(sku_id, v, slot)
         if not ns:
             return None
@@ -191,9 +200,24 @@ class Store:
         p = self.attempt_paths(sku_id, v, slot, n)
         qa = read_json(p["qa"], {})
         pick = self.review(sku_id, v).get(str(slot), {}).get("pick")
-        use_pasted = p["pasted"].exists() and pick != "gen"
-        return {"n": n, "file": p["pasted"] if use_pasted else p["gen"], "gen": p["gen"],
-                "pasted": p["pasted"] if p["pasted"].exists() else None, "qa": qa, "attempts": len(ns)}
+        gen = p["gen_final"] if p["gen_final"].exists() else p["gen"]
+        pasted = None
+        if p["pasted"].exists():
+            pasted = p["pasted_final"] if p["pasted_final"].exists() else p["pasted"]
+        use_pasted = pasted is not None and pick != "gen"
+        return {"n": n, "file": pasted if use_pasted else gen, "gen": gen, "pasted": pasted,
+                "gen_photo": p["gen"], "pasted_photo": p["pasted"] if p["pasted"].exists() else None,
+                "layout": read_json(p["layout"]), "qa": qa, "attempts": len(ns),
+                "version": self.version_key(p)}
+
+    @staticmethod
+    def version_key(paths: dict) -> str:
+        """Changes whenever the slot's shown images change (new attempt, re-render, new paste)."""
+        stamp = 0
+        for k in ("gen", "pasted", "gen_final", "pasted_final", "qa"):
+            if paths[k].exists():
+                stamp = max(stamp, paths[k].stat().st_mtime_ns)
+        return f"{paths['gen'].stem}-{stamp}"
 
     # ---- status (F1) ------------------------------------------------------
     def status(self, sku_id: str, busy: bool = False) -> str:

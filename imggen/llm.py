@@ -69,6 +69,9 @@ class LLM:
 
     def _json_call(self, messages, sku_id: str, step: str, retries: int = 3) -> dict:
         prices = self.cfg.get("text_pricing_usd_per_million_tokens") or {}
+        if self.ledger.spent_today() >= float(self.cfg.get("budget_usd_per_day", 10)):
+            from .gen.generate import BudgetExceeded
+            raise BudgetExceeded("今日预算已用完，已停止。")
         model = self.model
         delay = 1.0
         for i in range(retries + 1):

@@ -10,7 +10,8 @@ import os
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import cv2
@@ -18,12 +19,12 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageOps
 
 from .config import load_config
-from .copy_layout import compose_copy_panel, copy_block, copy_font
+from .copy_layout import LayoutOverflow, copy_block, copy_font, has_copy, make_layout, render_layout
 from .credentials import OPENAI_BASE_URL, safe_error
 from .gen.generate import Blocked, BudgetExceeded, GenRequest, Generator
 from .gen.ledger import Ledger
 from .llm import LLM
-from .plan import build_plan, load_templates, panel_copy, prompts_for_slot, validate
+from .plan import build_plan, ingredient_names, load_templates, panel_copy, prompts_for_slot, validate
 from .product_copy import apply_suggestions, checked_suggestions, sources_for, transfer_copy
 from .qa import label_text
 from .store import Store, now, plan_slots, read_json, write_json
@@ -53,35 +54,109 @@ def load_img(p: Path) -> np.ndarray:
 
 # ---------------------------------------------------------------- jobs
 class Jobs:
-    def __init__(self, workers: int = 6):
+    """Background jobs. State is written to workspace/.runtime/jobs.json, so the job list
+    survives a restart; jobs that were running when the tool stopped show as interrupted.
+
+    Conflicts: two jobs of the same product may run together only when both name their
+    slots and the slots do not overlap (a full set and a redo of a slot it is not making,
+    or two redos of different slots). Label, plan and copy jobs block the whole product.
+    """
+
+    KEEP = 200
+
+    def __init__(self, workers: int = 6, state_path: Path | None = None):
         self.pool = ThreadPoolExecutor(max_workers=max(2, workers) + 2)
         self.jobs: dict[str, dict] = {}
         self.lock = threading.Lock()
+        self.path = Path(state_path) if state_path else None
+        self._load()
+
+    # ---- persistence
+    def _load(self):
+        if not self.path or not self.path.exists():
+            return
+        try:
+            saved = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        for job in saved if isinstance(saved, list) else []:
+            if not isinstance(job, dict) or "id" not in job:
+                continue
+            if job.get("state") == "running":
+                job["state"] = "interrupted"
+                job["error"] = "工具重启时任务中断。已完成的图已保存，可再次提交继续。"
+            self.jobs[job["id"]] = job
+
+    def _save_locked(self):
+        if not self.path:
+            return
+        ordered = sorted(self.jobs.values(), key=lambda j: -j["started"])
+        keep = [j for i, j in enumerate(ordered) if i < self.KEEP or j["state"] == "running"]
+        self.jobs = {j["id"]: j for j in keep}
+        write_json(self.path, [dict(j) for j in keep])
+
+    def save(self):
+        with self.lock:
+            self._save_locked()
+
+    def progress(self, job: dict, done: int | None = None, total: int | None = None):
+        with self.lock:
+            if done is not None:
+                job["done"] = done
+            if total is not None:
+                job["total"] = total
+            job["updated"] = time.time()
+            self._save_locked()
+
+    # ---- conflicts
+    @staticmethod
+    def _conflict(a: dict, b: dict) -> str:
+        if a["sku"] != b["sku"]:
+            return ""
+        sa, sb = a.get("slots"), b.get("slots")
+        if sa is None or sb is None:
+            return "这个商品已有任务正在运行，请等当前任务完成。"
+        if a.get("variant") != b.get("variant"):
+            return ""
+        same = set(sa) & set(sb)
+        if not same:
+            return ""
+        if a.get("slot") is not None and a.get("slot") == b.get("slot"):
+            return "这个图位正在重出，无需重复提交。"
+        return "图位 %s 正在生成，请等它完成。" % "、".join(f"{s:02d}" for s in sorted(same))
 
     def start(self, kind: str, sku_id: str, fn, total: int = 1, variant: str = "",
-              slot: int | None = None) -> str:
+              slot: int | None = None, slots: list[int] | None = None) -> str:
         jid = uuid.uuid4().hex[:8]
-        job = dict(id=jid, kind=kind, sku=sku_id, variant=variant, slot=slot, total=total, done=0,
-                   state="running", error="", started=time.time())
+        if slot is not None and slots is None:
+            slots = [slot]
+        job = dict(id=jid, kind=kind, sku=sku_id, variant=variant, slot=slot,
+                   slots=sorted(set(slots)) if slots is not None else None, total=total, done=0,
+                   state="running", error="", started=time.time(), updated=time.time())
         with self.lock:
             for other in self.jobs.values():
-                if other["sku"] != sku_id or other["state"] != "running":
+                if other["state"] != "running":
                     continue
-                other_slot = other.get("slot")
-                if slot is None or other_slot is None:
-                    raise ValueError("这个商品已有任务正在运行，请等当前任务完成。")
-                if other["variant"] == variant and other_slot == slot:
-                    raise ValueError("这个图位正在重出，无需重复提交。")
+                msg = self._conflict(job, other)
+                if msg:
+                    raise ValueError(msg)
             self.jobs[jid] = job
+            self._save_locked()
 
         def run():
             try:
                 fn(job)
-                if job["state"] == "running":
-                    job["state"] = "done"
+                with self.lock:
+                    if job["state"] == "running":
+                        job["state"] = "done"
             except Exception as e:  # noqa: BLE001
-                job["error"] = safe_error(e)
-                job["state"] = "error"
+                with self.lock:
+                    job["error"] = safe_error(e)
+                    job["state"] = "error"
+            finally:
+                with self.lock:
+                    job["finished"] = job["updated"] = time.time()
+                    self._save_locked()
         self.pool.submit(run)
         return jid
 
@@ -95,10 +170,15 @@ class Jobs:
             return [j for i, j in enumerate(ordered) if i < n or j["state"] == "running"]
 
     def redo_for(self, sku_id: str, variant: str, slot: int) -> dict | None:
+        """A running job of this product that is making this slot (a redo or a full set)."""
         with self.lock:
             return next((j.copy() for j in self.jobs.values() if j["sku"] == sku_id and
-                         j.get("variant") == variant and j.get("slot") == slot and
-                         j["state"] == "running"), None)
+                         j["state"] == "running" and (j.get("slots") is None and j["kind"] in GEN_KINDS or
+                                                      j.get("variant") == variant and
+                                                      slot in (j.get("slots") or []))), None)
+
+
+GEN_KINDS = {"生成套图", "出图", "重出"}
 
 
 # ---------------------------------------------------------------- app services
@@ -107,7 +187,8 @@ class App:
         self.cfg = cfg or load_config()
         self.store = Store(self.cfg["workspace"] + "/")
         self.ledger = Ledger(Path(self.cfg["workspace"]) / "ledger.csv")
-        self.jobs = Jobs(int(self.cfg.get("concurrency", 6)))
+        self.jobs = Jobs(int(self.cfg.get("concurrency", 6)),
+                         Path(self.cfg["workspace"]) / ".runtime" / "jobs.json")
         self._client = None
         self.gen_pool = ThreadPoolExecutor(max_workers=int(self.cfg.get("concurrency", 6)))
 
@@ -242,6 +323,10 @@ class App:
     def generate_suite(self, sku_id: str, variant: str) -> str:
         label = self._confirmed_label(sku_id)
         self.store.vdir(sku_id, variant)
+        existing = self.store.plan(sku_id, variant)
+        # With a plan the job claims only the slots it will make, so a redo of another slot
+        # can run next to it. Without one it must make the plan first and claims the product.
+        claimed = self._pending_slots(sku_id, variant, existing) if existing else None
 
         def run(job):
             plan = self.store.plan(sku_id, variant)
@@ -249,10 +334,11 @@ class App:
                 if self.ledger.spent_today() >= float(self.cfg["budget_usd_per_day"]):
                     raise BudgetExceeded("今日预算已用完，已停止。")
                 plan = self._make_plan(sku_id, variant, label)
-            todo = self._pending_slots(sku_id, variant, plan)
+            todo = claimed if claimed is not None else self._pending_slots(sku_id, variant, plan)
             self._generate_slots(job, sku_id, variant, todo, {})
 
-        return self.jobs.start("生成套图", sku_id, run, total=1, variant=variant)
+        return self.jobs.start("生成套图", sku_id, run, total=len(claimed or []) or 1, variant=variant,
+                               slots=claimed)
 
     def save_plan(self, sku_id: str, variant: str, plan: dict) -> list[str]:
         plan["issues"] = validate(plan, self.store.label(sku_id), self.tpl["banned"]["words"])
@@ -286,7 +372,7 @@ class App:
             self._generate_slots(job, sku_id, variant, todo, notes or {})
 
         return self.jobs.start("重出" if redo_slot is not None else "出图", sku_id, run,
-                               total=len(todo), variant=variant, slot=redo_slot)
+                               total=len(todo), variant=variant, slot=redo_slot, slots=todo)
 
     def _pending_slots(self, sku_id: str, variant: str, plan: dict | None,
                        slots: list[int] | None = None) -> list[int]:
@@ -301,21 +387,23 @@ class App:
         return slots or [s for s in plan_slots(plan) if not self.store.attempts(sku_id, variant, s)]
 
     def _generate_slots(self, job: dict, sku_id: str, variant: str, todo: list[int], notes: dict):
-        job["total"] = len(todo)
+        self.jobs.progress(job, done=0, total=len(todo))
         if not todo:
             return
         gen = Generator(self.cfg, self.ledger, client=self.client)
         futs = [self.gen_pool.submit(self._one_slot, gen, sku_id, variant, s, notes.get(s, ""))
                 for s in todo]
         errs = []
-        for f in futs:
+        done = 0
+        for f in as_completed(futs):          # count each slot the moment it finishes
             try:
                 f.result()
             except BudgetExceeded:
                 errs.append("今日预算已用完（%s 美元），已停止" % self.cfg["budget_usd_per_day"])
             except Exception as e:  # noqa: BLE001
                 errs.append(safe_error(e)[:200])
-            job["done"] += 1
+            done += 1
+            self.jobs.progress(job, done=done)
         if errs:
             job["error"] = "；".join(sorted(set(errs)))
             job["state"] = "error"
@@ -358,18 +446,68 @@ class App:
             write_json(paths["qa"], {"error": "内容审核拦截：" + safe_error(e)[:300], "prompt": prompts})
             raise
         qa = self.check(sku_id, variant, slot, n)
-        planned_slot = plan["slots"][str(slot)]
-        heading, rows = panel_copy(planned_slot)
-        if heading or rows:
-            for path in (paths["gen"], paths["pasted"]):
-                if path.exists():
-                    compose_copy_panel(path, heading, rows, white=planned_slot["copy_layout"] == "capacity")
-            qa["rendered_copy"] = ([heading] if heading else []) + rows
+        layout = self.layout_for(plan["slots"][str(slot)], label)
+        write_json(paths["layout"], layout)
+        self._render(paths, layout, qa)
         qa["prompt"] = prompts
         qa["model"] = model
         qa["sec"] = round(time.time() - t0, 1)
         write_json(paths["qa"], qa)
         st.set_review(sku_id, variant, slot, status="pending", pick=None)
+
+    # ---- copy layer --------------------------------------------------------
+    @staticmethod
+    def layout_for(planned_slot: dict, label: dict) -> dict:
+        """Copy layer from the plan. Confirmed multi-word names are kept on one line."""
+        heading, rows = panel_copy(planned_slot)
+        keep = ingredient_names(label or {}) + [(label or {}).get(k, "") for k in
+                                                ("product_name", "capacity", "pieces_text")]
+        style = "white_panel" if planned_slot.get("copy_layout") == "capacity" else "dark_panel"
+        return make_layout(heading, rows, style=style, keep=keep)
+
+    @staticmethod
+    def _render(paths: dict, layout: dict, qa: dict) -> None:
+        """Render the finished artwork for both photo versions; photos are only read."""
+        qa.pop("layout_error", None)
+        qa["flags"] = [f for f in qa.get("flags", []) if not f.startswith("文案排不下")]
+        for photo, final in (("gen", "gen_final"), ("pasted", "pasted_final")):
+            paths[final].unlink(missing_ok=True)
+        if not has_copy(layout):
+            qa.pop("rendered_copy", None)
+            return
+        try:
+            for photo, final in (("gen", "gen_final"), ("pasted", "pasted_final")):
+                if paths[photo].exists():
+                    render_layout(paths[photo], layout, paths[final])
+            qa["rendered_copy"] = ([layout["heading"]] if layout.get("heading") else []) + layout["rows"]
+        except LayoutOverflow as e:
+            for final in ("gen_final", "pasted_final"):
+                paths[final].unlink(missing_ok=True)
+            qa["layout_error"] = str(e)
+            qa["flags"].append("文案排不下：%s。当前显示的是没加文字的照片，需要调整构图或文案。" % e)
+            qa.pop("rendered_copy", None)
+        qa["level"] = "warn" if qa["flags"] else "ok"
+
+    def rerender(self, sku_id: str, variant: str, slot: int, n: int | None = None) -> dict:
+        """Re-render the copy layer from the current plan. No API call, photos untouched."""
+        st = self.store
+        ns = st.attempts(sku_id, variant, slot)
+        if not ns:
+            raise ValueError("这个图位还没有图。")
+        n = n or ns[-1]
+        paths = st.attempt_paths(sku_id, variant, slot, n)
+        plan, label = st.plan(sku_id, variant), st.label(sku_id) or {}
+        if not paths["layout"].exists() and read_json(paths["qa"], {}).get("rendered_copy"):
+            raise ValueError("这张是旧版生成的图，文字已经印在照片上，不能重新排版；重出一次即可使用新排版。")
+        issues = validate({"slots": {str(slot): plan["slots"][str(slot)]}}, label, self.tpl["banned"]["words"])
+        if issues:
+            raise ValueError("文案有问题，先改好再排版：" + "；".join(issues[:3]))
+        layout = self.layout_for(plan["slots"][str(slot)], label)
+        write_json(paths["layout"], layout)
+        qa = read_json(paths["qa"], {})
+        self._render(paths, layout, qa)
+        write_json(paths["qa"], qa)
+        return qa
 
     def source_ocr(self, sku_id: str) -> dict | None:
         """OCR of the main product photo, cached: boxes for the label paste, lines for its guard."""
@@ -457,10 +595,18 @@ def compose_steps(parts: list[Path], captions: list[str], out: Path, size: int =
         if not cap:
             continue
         # Measure the confirmed copy and wrap before reducing its font size.
-        for fs in range(max(12, round(size * 0.026)), 0, -1):
-            block = copy_block(cap, fs, x1 - x0 - pad * 2)
-            if block.height <= (y1 - y0) * 0.30:
+        # Words and phrases are never cut; below the smallest readable size the step fails.
+        block = None
+        for fs in range(max(12, round(size * 0.026)), max(9, round(size * 0.012)) - 1, -1):
+            try:
+                candidate = copy_block(cap, fs, x1 - x0 - pad * 2)
+            except LayoutOverflow:
+                continue
+            if candidate.height <= (y1 - y0) * 0.30:
+                block = candidate
                 break
+        if block is None:
+            raise LayoutOverflow(f"第 {tile} 步说明“{cap}”在窄格里排不下，需要缩短说明")
         height = block.height + pad
         d.rectangle((x0, y1 - height, x1, y1), fill=(16, 28, 39, 200))
         block.draw(d, x0 + pad, y1 - height + pad // 2, "white")

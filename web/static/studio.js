@@ -139,7 +139,7 @@ async function pollJobs(sku) {
       if (visible.length > 3) entries.push({title: `另有 ${visible.length - 3} 项正在处理`});
       if (!progressRegion.dataset.submitting) showProgress(entries);
       document.getElementById('jobs').innerHTML = jobs.slice(0, 8).map(job => {
-        const status = job.state === 'error' ? jobError(job.error)
+        const status = job.state === 'error' || job.state === 'interrupted' ? jobError(job.error)
           : job.state === 'done' ? '已完成' : '进行中';
         const task = [job.kind, job.sku, job.variant, job.slot && '图位 ' + job.slot].filter(Boolean).join(' · ');
         return `<li><span>${esc(task)}</span><span class="${job.state === 'error' ? 'err' : 'mute'}">${esc(status)}</span></li>`;
@@ -187,33 +187,53 @@ function redoFeedback(card, message, state) {
 
 async function refreshReviewCard(card) {
   const {sku, v, slot} = card.dataset;
-  const url = new URL('/review', location.origin);
-  url.searchParams.set('show', 'all');
+  const url = new URL('/api/slot', location.origin);
   url.searchParams.set('sku', sku);
-  const response = await fetch(url);
+  url.searchParams.set('variant', v);
+  url.searchParams.set('slot', slot);
+  const response = await fetch(url, {cache: 'no-store'});
   if (!response.ok) throw new Error('预览刷新失败');
-  const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
-  const replacement = [...doc.querySelectorAll('.cell[data-slot]')].find(
-    element => element.dataset.sku === sku && element.dataset.v === v && element.dataset.slot === slot
-  );
-  if (!replacement) {
-    delete card.dataset.redoId;
-    redoFeedback(card, '已完成，刷新审核页查看。', 'done');
-    return;
-  }
-  const group = card.closest('[data-review-group]');
-  const tally = replacement.closest('[data-review-group]').querySelector('[data-review-count]');
-  group.querySelector('[data-review-count]').textContent = tally.textContent;
+  const data = await response.json();
+  const holder = document.createElement('div');
+  holder.innerHTML = data.html;
+  const replacement = holder.firstElementChild;
+  // Keep what the user is in the middle of: an open redo note and focus.
+  const editor = card.querySelector('.redo-editor');
+  const draft = editor && !editor.hidden ? editor.elements.note.value : null;
   const keepFocus = card.contains(document.activeElement);
+  const group = card.closest('[data-review-group]');
+  if (group) group.querySelector('[data-review-count]').textContent = data.tally;
   card.replaceWith(replacement);
+  if (draft !== null) {
+    const next = replacement.querySelector('.redo-editor');
+    if (next) { next.hidden = false; next.elements.note.value = draft; }
+  }
   if (keepFocus) replacement.focus({preventScroll: true});
+}
+
+const seenProgress = Object.create(null);
+
+async function refreshChangedCards(sku) {
+  const response = await fetch('/api/slot_versions?sku=' + encodeURIComponent(sku), {cache: 'no-store'});
+  if (!response.ok) return;
+  const versions = await response.json();
+  const cards = document.querySelectorAll(`.cell[data-slot][data-sku="${CSS.escape(sku)}"]`);
+  for (const card of cards) {
+    if (card.dataset.refreshing || card.dataset.submitting) continue;
+    const key = card.dataset.v + ':' + card.dataset.slot;
+    if (key in versions && versions[key] !== (card.dataset.version || '')) {
+      card.dataset.refreshing = '1';
+      refreshReviewCard(card).catch(() => { delete card.dataset.refreshing; });
+    }
+  }
 }
 
 function updateRedoCards(jobs) {
   document.querySelectorAll('.cell[data-redo-id]').forEach(card => {
     const job = jobs.find(task => task.id === card.dataset.redoId);
-    if (!job || job.state === 'running' || card.dataset.refreshing) return;
-    if (job.state === 'error') {
+    if (job && job.state === 'running') return;
+    if (card.dataset.refreshing) return;
+    if (job && (job.state === 'error' || job.state === 'interrupted')) {
       delete card.dataset.redoId;
       redoFeedback(card, jobError(job.error), 'error');
       return;
@@ -221,6 +241,15 @@ function updateRedoCards(jobs) {
     card.dataset.refreshing = '1';
     refreshReviewCard(card).catch(() => { delete card.dataset.refreshing; });
   });
+  // Any generating job that made progress (full set, several slots): update only changed cards.
+  const touched = new Set();
+  for (const job of jobs) {
+    if (!['生成套图', '出图', '重出'].includes(job.kind)) continue;
+    const mark = job.state + ':' + job.done;
+    if (seenProgress[job.id] !== undefined && seenProgress[job.id] !== mark) touched.add(job.sku);
+    seenProgress[job.id] = mark;
+  }
+  touched.forEach(sku => refreshChangedCards(sku).catch(() => {}));
 }
 
 function closeRedo(button) {
@@ -232,6 +261,10 @@ function closeRedo(button) {
 function act(element, action) {
   const card = element.closest('.cell');
   if (card.dataset.redoId || card.dataset.submitting) return;
+  if (action === 'relayout') {
+    submitReview(card, 'relayout');
+    return;
+  }
   if (action === 'redo') {
     const editor = card.querySelector('.redo-editor');
     editor.hidden = false;
@@ -246,6 +279,7 @@ async function submitReview(card, action, note = '') {
   if (data.redoId || data.submitting) return;
   data.submitting = '1';
   if (action === 'redo') redoFeedback(card, '正在提交重出', 'running');
+  if (action === 'relayout') redoFeedback(card, '正在重新排版', 'running');
   try {
     const result = await post('/api/review', {
       sku: data.sku, variant: data.v, slot: +data.slot, action, note

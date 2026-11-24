@@ -16,9 +16,9 @@ pricing_usd_per_million_tokens:   # 出图单价，OpenAI 改价时更新
   text_input: 5
   image_input: 8
   image_output: 30
-text_pricing_usd_per_million_tokens:  # 文本模型单价；0 = 不计入预算
-  input: 0
-  output: 0
+text_pricing_usd_per_million_tokens:  # 识别标签、做计划、提炼文案用的文本模型单价，计入每日预算
+  input: 2                        # 按 GPT-4.1 估算；留 0 时程序也按这个估算，以 OpenAI 账单为准
+  output: 8
 faces:
   allow_full_face: false          # 所有类目都允许完整人脸
   categories: [mask]              # 只在这些类目的场景图允许人脸（第二轮结论：先开面膜）
