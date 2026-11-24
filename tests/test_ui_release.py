@@ -9,7 +9,9 @@ def test_landing_and_packaged_assets(tmp_path):
     cfg = load_config()
     cfg.update(demo_mode=True, workspace=str(tmp_path / "ws"))
     client = TestClient(create_app(cfg))
-    landing = client.get("/")
+    home = client.get("/", follow_redirects=False)
+    assert home.status_code == 307 and home.headers["location"] == "/library"
+    landing = client.get("/showcase")
     assert landing.status_code == 200
     assert 'href="/library#drop-area"' in landing.text
     assert 'href="/plan"' in landing.text
@@ -34,5 +36,5 @@ def test_landing_and_packaged_assets(tmp_path):
     local = tmp_path/"ws"/"landing-media"
     local.mkdir()
     (local/(LOCAL_CLIPS[0]+"-tight.mp4")).write_bytes(b"sample")
-    assert 'data-local-clips="window"' in client.get("/").text
+    assert 'data-local-clips="window"' in client.get("/showcase").text
     assert client.get("/showcase-media/window-tight.mp4").content == b"sample"

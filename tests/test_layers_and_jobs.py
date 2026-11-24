@@ -1,5 +1,5 @@
-"""v1.5 (phase 1): photo and copy are separate layers, phrases are never cut, jobs survive a
-restart, progress counts slots as they finish, full set and redo of other slots can overlap.
+"""v1.5–1.6: the image model designs the text (phrases kept whole), photos are kept, jobs survive a
+restart, progress counts slots as they finish, sets queue under the per-minute image limit.
 Demo mode only: no network, no cost."""
 import hashlib
 import io
@@ -81,57 +81,43 @@ def _digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def test_photo_is_kept_and_relayout_costs_nothing(tmp_path):
+def test_text_is_designed_by_the_model_not_drawn_on_a_strip(tmp_path):
     client, core, sku = bench(tmp_path)
     job = _wait(core, core.generate(sku, "A", slots=[3]))
     assert job["state"] == "done", job
     st = core.store
     paths = st.attempt_paths(sku, "A", 3, 1)
-    assert paths["layout"].exists() and paths["gen_final"].exists()
-    photo = _digest(paths["gen"])
     cur = st.current(sku, "A", 3)
-    assert cur["file"] in (paths["gen_final"], paths["pasted_final"])
-    assert cur["gen_photo"] == paths["gen"]
-    with Image.open(paths["gen"]) as a, Image.open(paths["gen_final"]) as b:
-        assert a.size == b.size
-
-    calls = core.ledger.path.read_text().count("\n")
-    r = client.post("/api/review", json={"sku": sku, "variant": "A", "slot": 3, "action": "relayout"}).json()
-    assert r == {"ok": True}
-    assert core.ledger.path.read_text().count("\n") == calls       # no API call, no cost
-    assert _digest(paths["gen"]) == photo                            # photo never written over
-    assert st.attempts(sku, "A", 3) == [1]                           # no new attempt
-
+    assert not paths["gen_final"].exists() and not paths["pasted_final"].exists()
+    assert cur["file"] in (paths["gen"], paths["pasted"])          # the model's image is the artwork
+    prompt = cur["qa"]["prompt"][0]
+    assert 'Headline: "KEY INGREDIENTS"' in prompt
+    assert 'Ingredient name: "Hyaluronic Acid"' in prompt
+    assert '"Hyaluronic Acid"' in prompt.split("phrases together on one line")[1]
+    assert "No added text" not in prompt and "central 72 percent" not in prompt
     card = client.get("/api/slot", params={"sku": sku, "variant": "A", "slot": 3}).json()
-    assert 'data-slot="3"' in card["html"] and "重新排版" in card["html"]
+    assert 'data-slot="3"' in card["html"] and "重新排版" not in card["html"]
     assert card["tally"] == "通过 0 / 3"
     versions = client.get("/api/slot_versions", params={"sku": sku}).json()
     assert versions["A:3"] and versions["A:1"] == ""
 
 
-def test_copy_that_cannot_fit_is_flagged_not_cut(tmp_path):
-    client, core, sku = bench(tmp_path)
-    word = "Pneumonoultramicroscopicsilicovolcanoconiosis" * 4
-    label = core.store.label(sku)
-    label["ingredient_names"] = [word]
-    core.confirm_label(sku, label)
-    plan = core.store.plan(sku, "A")
-    plan["slots"]["3"]["ingredient_labels"] = [word]
-    write_json(core.store.vdir(sku, "A") / "plan.json", plan)
-    assert _wait(core, core.generate(sku, "A", slots=[3]))["state"] == "done"
-    cur = core.store.current(sku, "A", 3)
-    assert cur["file"] == cur["gen_photo"] or cur["file"] == cur["pasted_photo"]
-    assert any(f.startswith("文案排不下") for f in cur["qa"]["flags"])
+def test_step_labels_and_captions_are_in_each_panel_prompt(tmp_path):
+    from imggen.plan import load_templates, prompts_for_slot
+    plan = {"style": {}, "slots": {"5": {"name": "使用方法", "steps": [
+        {"caption": "Cleanse face", "action": "a"}, {"caption": "Apply a few drops", "action": "b"},
+        {"caption": "Massage gently", "action": "c"}]}}}
+    prompts = prompts_for_slot(5, plan, {}, load_templates(tmp_path), False)
+    assert len(prompts) == 3
+    assert 'Step label: "STEP 2"' in prompts[1] and 'Caption: "Apply a few drops"' in prompts[1]
 
 
-def test_legacy_attempt_cannot_be_relaid(tmp_path):
-    client, core, sku = bench(tmp_path)
-    paths = core.store.attempt_paths(sku, "A", 3, 1)
-    paths["gen"].parent.mkdir(parents=True, exist_ok=True)
-    paths["gen"].write_bytes(_png("gray", 128))
-    write_json(paths["qa"], {"flags": [], "rendered_copy": ["KEY INGREDIENTS"]})
-    r = client.post("/api/review", json={"sku": sku, "variant": "A", "slot": 3, "action": "relayout"}).json()
-    assert "旧版" in r["error"]
+def test_user_template_copy_still_gets_new_text_rules(tmp_path):
+    from imggen.plan import load_templates
+    (tmp_path / "templates").mkdir()
+    (tmp_path / "templates" / "slots.yaml").write_text("no_faces: \"No faces.\"\n", encoding="utf-8")
+    tpl = load_templates(tmp_path)["slots"]
+    assert tpl["no_faces"] == "No faces." and "{lines}" in tpl["text_block"] and tpl["slots"]
 
 
 # ---------------------------------------------------------------- jobs
@@ -191,3 +177,31 @@ def test_text_model_cost_counts_toward_budget(tmp_path):
     cfg = load_config()
     assert cfg["text_pricing_usd_per_million_tokens"]["input"] > 0
     assert cfg["text_pricing_usd_per_million_tokens"]["output"] > 0
+
+
+def test_rate_gate_keeps_a_share_for_redos():
+    from imggen.gen.rate import RateGate
+    gate = RateGate(images_per_minute=10, use_ratio=0.8)
+    assert sum(gate.try_acquire(False, now=0.0) for _ in range(20)) == 8    # full sets: 80%
+    assert sum(gate.try_acquire(True, now=1.0) for _ in range(20)) == 2     # redos: the rest
+    assert gate.try_acquire(False, now=61.0)                                 # next minute
+
+
+def test_sets_beyond_the_limit_wait_in_queue(tmp_path):
+    client, core, sku = bench(tmp_path, throughput={"images_per_minute": 150, "max_parallel_sets": 1})
+    other = core.store.create_sku("Second", [("source.png", _png())])
+    core.confirm_label(other, core.store.label(sku))
+    write_json(core.store.vdir(other, "A") / "plan.json", core.store.plan(sku, "A"))
+    gate = Event()
+    core._generate_slots = lambda job, *a, **k: gate.wait(5)
+    first = core.generate_suite(sku, "A")
+    second = core.generate_suite(other, "A")
+    t = time.time()
+    while time.time() - t < 3:
+        jobs = {j["id"]: j for j in core.jobs.recent()}
+        if jobs[first].get("phase") == "running" and jobs[second].get("phase") == "queued":
+            break
+        time.sleep(0.02)
+    assert jobs[first]["phase"] == "running" and jobs[second]["phase"] == "queued"
+    gate.set()
+    assert _wait(core, second)["state"] == "done"

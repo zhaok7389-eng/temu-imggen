@@ -43,8 +43,9 @@ def _usage(resp) -> dict:
 
 
 class Generator:
-    def __init__(self, cfg: dict, ledger: Ledger, client=None):
+    def __init__(self, cfg: dict, ledger: Ledger, client=None, gate=None, priority: bool = False):
         self.cfg, self.ledger = cfg, ledger
+        self.gate, self.priority = gate, priority
         if client is None:
             from openai import OpenAI
             client = OpenAI(base_url=OPENAI_BASE_URL)  # reads OPENAI_API_KEY from the environment
@@ -61,6 +62,8 @@ class Generator:
                     model=req.model, quality=req.quality)
         delay = 1.0
         for i in range(max_retries + 1):
+            if self.gate is not None:
+                self.gate.acquire(self.priority)
             t = time.time()
             files = [open(p, "rb") for p in req.images]
             try:
@@ -74,6 +77,8 @@ class Generator:
                                 status="blocked" if blocked else f"error_{status}", error=msg[:300])
                 if blocked:
                     raise Blocked(msg) from e
+                if status == 429 and self.gate is not None:
+                    self.gate.cool_down(delay * 2)
                 if status in (429, 500, 502, 503, 504) or status is None:
                     if i < max_retries:
                         time.sleep(delay); delay = min(delay * 2, 8)

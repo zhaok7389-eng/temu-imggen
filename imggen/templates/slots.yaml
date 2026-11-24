@@ -1,14 +1,18 @@
-# 8 个图位（v0）。来源：GPT 实测任务书 T1/T2/T6 的提示词；拿到《版式规范卡 v0》后在这里改。
-# 用户的审美调整都改这个文件（复制到 workspace/templates/slots.yaml 后改，程序优先读那份）。
+# 8 个图位（v2，2026-11-24）。文字由图像模型直接设计进画面（不再由程序在照片下方加文字条）。
+# 用户的审美调整都改这个文件（复制到 workspace/templates/slots.yaml 后改，程序优先读那份；
+# 那份里没写的键用这里的默认值）。以后接入亚马逊主图模板库时，模板也落在这一层。
 #
 # prompt 里的占位符由程序填：
 #   {style}       风格锁（背景、配色、光线、道具）
-#   {headline}    标题（只能来自已确认的卖点/品名/容量/件数）
-#   {bullets}     要点（同上）
-#   {capacity}    容量
 #   {scene}       场景描述（计划里写，不含文字）
 #   {people}      人物规则（人脸开关决定）
-# copy 表示这个图位加什么字：none / headline / headline_bullets / capacity / steps
+#   {ingredients} 已确认的成分/材质名
+#   {action}      使用方法某一步的动作（只在 step_prompt）
+#   {step_no}     第几步（只在 step_prompt）
+# 带字的图位，程序会在提示词后面接上「文字块」：逐条列出要加的字（只来自已确认文案），
+# 以及哪些词组换行时不能拆开。文字块的说明文字见下面的 text_block。
+#
+# copy 表示这个图位加什么字：none / headline_bullets / ingredients / texture / scene / capacity / steps
 slots:
   - id: 1
     name: 首图
@@ -21,62 +25,67 @@ slots:
     copy: headline_bullets
     layout: benefits
     max_bullets: 3
-    photo_prompt: >-
-      Square product benefit photograph. Keep the complete product centered and visually prominent,
-      with a clean styled setting. {style}
     prompt: >-
-      Square benefit image. Product on the right, large. On the left, headline "{headline}"
-      followed by only these approved short points: {bullets}. If none, leave the space blank.
-      {style}
+      Square e-commerce benefit image. Product on the right, large and complete. On the left, the
+      headline in a clean bold sans-serif, then the short benefit points with small check-mark icons,
+      generous spacing, readable on a phone. {style}
   - id: 3
     name: 成分图
     copy: ingredients
     layout: ingredients
-    photo_prompt: >-
-      Square ingredient photograph. Show the product with only these confirmed ingredients as props:
-      {ingredients}. Keep props distinct and easy to identify. {style}
     prompt: >-
-      Square ingredient image. Product in the center with confirmed ingredient props: {scene}.
-      Only this added headline is allowed: "{headline}". {style}
+      Square e-commerce ingredient image. The product in the center, complete, with only these
+      confirmed ingredients as props: {ingredients}. Keep props distinct and easy to identify.
+      The headline across the top; each ingredient name placed near its own prop. {style}
   - id: 4
     name: 质地特写
     copy: texture
     layout: texture
     prompt: >-
-      Square texture close-up. A generous swatch of the product's texture in the foreground:
-      {scene}. The product stands sharp behind it. {style} No added text.
+      Square e-commerce texture close-up. A generous swatch of the product's texture in the
+      foreground: {scene}. The product stands sharp behind it. The caption sits in open space
+      where it does not cover the product or the swatch. {style}
   - id: 5
     name: 使用方法
     copy: steps
     confirmed_steps_only: true
-    # 每格单独生成，再由程序拼成 3 格并加编号和说明文字（实测：一次出多格会乱码）
+    # 每格单独生成（实测：一次出多格会乱码），程序只把三格拼在一起，不加任何字
     step_prompt: >-
       Tall portrait close-up photo for step {step_no} of a skincare routine: {action}. Only hands are
       visible, no face. Show exactly one product container; never duplicate the jar or bottle.
-      The product is clearly visible. {style} No added text.
+      The product is clearly visible. The step label and its caption at the top of the frame,
+      readable on a phone. {style}
   - id: 6
     name: 场景图
     copy: scene
     layout: scene
     prompt: >-
-      Square lifestyle image: {scene}. A hand holds the product naturally, label facing the camera.
-      {people} {style} No added text.
+      Square e-commerce lifestyle image: {scene}. A hand holds the product naturally, label facing
+      the camera. The caption sits in open space where it does not cover the product. {people} {style}
   - id: 7
     name: 尺寸图
     copy: capacity
     layout: capacity
-    photo_prompt: >-
-      Square size image. Plain pure white background, product centered and upright, soft shadow.
-      No measuring marks, diagrams, callouts or graphic elements.
     prompt: >-
       Square size image. Plain pure white background, product centered and upright, soft shadow.
-      Only one line of added text below the product: "{capacity}". Nothing else.
+      The capacity text as one line below the product. No measuring marks or diagrams.
   - id: 8
     name: 礼品场景
     copy: none
     prompt: >-
       Square gift image: {scene}. The product is the hero, label facing the camera. {style}
       No added text.
+
+# 带字图位的「文字块」。{lines} 是逐条要加的字，{phrases} 是不能拆开的词组。
+# 这里只规定「用哪些字、怎么换行」；字体、底色、横幅、文字框等设计由模型按图位描述决定，
+# 以后按模板库再细化（不要在这里写死禁止项）。
+text_block: >-
+  Design the following text into the image as part of the layout. Use exactly these words,
+  spelled exactly as written, and add no other text:
+  {lines}
+text_phrases: >-
+  When a line wraps, break only between words, never inside a word, and keep each of these
+  phrases together on one line: {phrases}.
 
 # 每条提示词末尾都加（GPT 实测任务书原文，人脸部分由开关决定）
 fidelity: >-

@@ -3,7 +3,10 @@
 workspace: ./workspace
 demo_mode: false                  # true = 不调用 OpenAI、不花钱，出占位图（熟悉流程用）
 budget_usd_per_day: 10
-concurrency: 6
+throughput:                       # 出图速度（按 OpenAI 账号的出图上限设置）
+  images_per_minute: 150          # Settings → Limits → Image「gpt-image」那一行的 IPM（Launch 档 150）
+  use_ratio: 0.8                  # 整套出图最多用到上限的 80%；其余留给单张重出和失败重试
+  max_parallel_sets: 10           # 最多同时生成几套，多出来的自动排队
 generation:
   model: gpt-image-2.5-flare
   quality: medium

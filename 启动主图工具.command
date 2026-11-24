@@ -11,19 +11,11 @@ SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 update_from_github() {
   local T SHA HAVE TMP SRC
   T="$(security find-generic-password -s temu-imggen -a GITHUB_TOKEN -w 2>/dev/null)"
-  if [ -z "$T" ] && [ ! -f .no-auto-update ]; then
-    T="$(osascript -e 'try' \
-      -e 'text returned of (display dialog "自动更新：粘贴 GitHub 令牌（github_pat_ 开头，只存进本机钥匙串，以后不再问）。\n\n还没有令牌就点「先不用」，工具照常打开。" default answer "" with hidden answer buttons {"先不用", "保存"} default button "保存" with title "Temu 主图工具")' \
-      -e 'on error' -e 'return ""' -e 'end try' 2>/dev/null)"
-    if [ -n "$T" ]; then
-      security add-generic-password -U -s temu-imggen -a GITHUB_TOKEN -w "$T" >/dev/null 2>&1
-    else
-      touch .no-auto-update   # 不再每次问；删掉这个文件可以重新设置
-    fi
-  fi
-  [ -z "$T" ] && return 0
+  # 仓库公开时不需要令牌；改成私有后用钥匙串里的令牌
+  local AUTH=()
+  [ -n "$T" ] && AUTH=(-H "Authorization: Bearer $T")
   say_step "检查更新"
-  SHA="$(curl -fsS --max-time 15 -H "Authorization: Bearer $T" -H "Accept: application/vnd.github.sha" \
+  SHA="$(curl -fsS --max-time 15 "${AUTH[@]}" -H "Accept: application/vnd.github.sha" \
         "https://api.github.com/repos/$REPO/commits/main" 2>/dev/null | tr -cd '0-9a-f' | cut -c1-40)"
   [ ${#SHA} -eq 40 ] || SHA=""
   if [ -z "$SHA" ]; then
@@ -37,7 +29,7 @@ update_from_github() {
   fi
   echo "发现新版本，下载中…"
   TMP="$(mktemp -d)"
-  if curl -fsSL --max-time 300 -H "Authorization: Bearer $T" -H "Accept: application/vnd.github+json" \
+  if curl -fsSL --max-time 300 "${AUTH[@]}" -H "Accept: application/vnd.github+json" \
        "https://api.github.com/repos/$REPO/zipball/$SHA" -o "$TMP/app.zip" \
      && /usr/bin/ditto -x -k "$TMP/app.zip" "$TMP/x"; then
     SRC="$(find "$TMP/x" -mindepth 1 -maxdepth 1 -type d | head -1)"
@@ -68,11 +60,43 @@ fail() {
 }
 
 # 1. 拿最新代码（没网或失败就跳过，不影响使用）
-if [ -d .git ] && command -v git >/dev/null 2>&1; then
+#    这个文件夹是 git 下载的：以 GitHub 上的 main 为准。本地对代码的改动先自动备份
+#    （git stash，可找回），再更新；workspace/、config.yaml、.venv-app/ 不受影响。
+if [ -d .git ] && command -v git >/dev/null 2>&1 && [ "$1" != "--updated" ]; then
   say_step "检查更新"
-  git pull --ff-only --quiet 2>/dev/null && echo "已是最新" || echo "跳过更新（没网或有本地改动）"
+  if git fetch --quiet origin main 2>/dev/null; then
+    if [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] && [ -z "$(git status --porcelain --untracked-files=no)" ]; then
+      echo "已是最新"
+    else
+      if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+        git stash push --quiet -m "启动更新前自动备份 $(date '+%Y-%m-%d %H:%M')" \
+          && echo "本地改过的代码已备份（git stash list 可查看）"
+      fi
+      # reset 会覆盖挡路的未跟踪同名文件；然后确保停在 main 分支上
+      git reset --hard --quiet origin/main && git checkout --quiet -B main \
+        && chmod +x ./*.command && echo "已更新到最新版 $(git rev-parse --short HEAD)"
+      exec bash "$SELF" --updated      # 用新版启动文件继续
+    fi
+  else
+    echo "跳过更新（连不上 GitHub）"
+  fi
 elif [ "$1" != "--updated" ]; then
   update_from_github "$@"
+fi
+
+# 1b. 旧的工具窗口还开着（端口 8765 被占用）：如果占用的是本工具，先把它关掉再启动新版
+OLD_PID="$(lsof -nP -iTCP:8765 -sTCP:LISTEN -t 2>/dev/null | head -1)"
+if [ -n "$OLD_PID" ]; then
+  if ps -o command= -p "$OLD_PID" 2>/dev/null | grep -Eq "app\.py|uvicorn|temu-imggen"; then
+    say_step "关闭之前还在运行的主图工具"
+    kill "$OLD_PID" 2>/dev/null
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      lsof -nP -iTCP:8765 -sTCP:LISTEN -t >/dev/null 2>&1 || break
+      sleep 0.5
+    done
+  else
+    fail "端口 8765 被别的程序占用（不是主图工具）。关掉那个程序，或重启电脑后再双击。"
+  fi
 fi
 
 # 2. 第一次：安装 uv（装 Python 和依赖的工具）

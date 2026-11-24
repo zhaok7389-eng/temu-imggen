@@ -57,3 +57,15 @@ def compare(expected: list[str], found: list[str]):
                 best, best_txt = r, c
         out.append({"expected": e, "found": best_txt, "sim": round(best, 3)})
     return out
+
+
+def contains(line: str, phrase: str, min_sim: float = 0.9) -> bool:
+    """True if `phrase` appears in one OCR line (tolerating OCR noise), i.e. it was not split."""
+    ln, ph = _norm(line), _norm(phrase)
+    if not ph:
+        return True
+    if ph in ln:
+        return True
+    n = len(ph)
+    return any(difflib.SequenceMatcher(None, ph, ln[i:i + n]).ratio() >= min_sim
+               for i in range(0, max(1, len(ln) - n + 1)))

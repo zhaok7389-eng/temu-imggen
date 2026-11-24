@@ -16,15 +16,16 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw, ImageOps
+from PIL import Image, ImageOps
 
 from .config import load_config
-from .copy_layout import LayoutOverflow, copy_block, copy_font, has_copy, make_layout, render_layout
 from .credentials import OPENAI_BASE_URL, safe_error
 from .gen.generate import Blocked, BudgetExceeded, GenRequest, Generator
 from .gen.ledger import Ledger
+from .gen.rate import RateGate
 from .llm import LLM
-from .plan import build_plan, ingredient_names, load_templates, panel_copy, prompts_for_slot, validate
+from .plan import (build_plan, load_templates, prompts_for_slot, text_lines, unbreakable,
+                   validate)
 from .product_copy import apply_suggestions, checked_suggestions, sources_for, transfer_copy
 from .qa import label_text
 from .store import Store, now, plan_slots, read_json, write_json
@@ -187,15 +188,23 @@ class App:
         self.cfg = cfg or load_config()
         self.store = Store(self.cfg["workspace"] + "/")
         self.ledger = Ledger(Path(self.cfg["workspace"]) / "ledger.csv")
-        self.jobs = Jobs(int(self.cfg.get("concurrency", 6)),
-                         Path(self.cfg["workspace"]) / ".runtime" / "jobs.json")
         self._client = None
-        self.gen_pool = ThreadPoolExecutor(max_workers=int(self.cfg.get("concurrency", 6)))
+        self._setup_throughput()
+        self.jobs = Jobs(self.max_sets + 6, Path(self.cfg["workspace"]) / ".runtime" / "jobs.json")
+
+    def _setup_throughput(self):
+        """Sizes from the account's image limit (see 更新说明 v1.6 for the arithmetic)."""
+        t = self.cfg.get("throughput") or {}
+        self.max_sets = max(1, int(t.get("max_parallel_sets", 10)))
+        self.gate = RateGate(t.get("images_per_minute", 150), t.get("use_ratio", 0.8))
+        self.set_slots = threading.BoundedSemaphore(self.max_sets)
+        # enough threads for every running set (10 calls each) plus redos; the gate sets the pace
+        self.gen_pool = ThreadPoolExecutor(max_workers=min(160, self.max_sets * 10 + 20))
 
     def reload(self, cfg: dict):
         self.cfg = cfg
         self.reset_client()
-        self.gen_pool = ThreadPoolExecutor(max_workers=int(cfg.get("concurrency", 6)))
+        self._setup_throughput()
 
     def reset_client(self):
         self._client = None
@@ -329,16 +338,24 @@ class App:
         claimed = self._pending_slots(sku_id, variant, existing) if existing else None
 
         def run(job):
-            plan = self.store.plan(sku_id, variant)
-            if plan is None:
-                if self.ledger.spent_today() >= float(self.cfg["budget_usd_per_day"]):
-                    raise BudgetExceeded("今日预算已用完，已停止。")
-                plan = self._make_plan(sku_id, variant, label)
-            todo = claimed if claimed is not None else self._pending_slots(sku_id, variant, plan)
-            self._generate_slots(job, sku_id, variant, todo, {})
+            job["phase"] = "queued"          # waits here while the maximum number of sets run
+            self.jobs.save()
+            with self.set_slots:
+                job["phase"] = "running"
+                self.jobs.save()
+                self._run_suite(job, sku_id, variant, label, claimed)
 
         return self.jobs.start("生成套图", sku_id, run, total=len(claimed or []) or 1, variant=variant,
                                slots=claimed)
+
+    def _run_suite(self, job, sku_id, variant, label, claimed):
+        plan = self.store.plan(sku_id, variant)
+        if plan is None:
+            if self.ledger.spent_today() >= float(self.cfg["budget_usd_per_day"]):
+                raise BudgetExceeded("今日预算已用完，已停止。")
+            plan = self._make_plan(sku_id, variant, label)
+        todo = claimed if claimed is not None else self._pending_slots(sku_id, variant, plan)
+        self._generate_slots(job, sku_id, variant, todo, {})
 
     def save_plan(self, sku_id: str, variant: str, plan: dict) -> list[str]:
         plan["issues"] = validate(plan, self.store.label(sku_id), self.tpl["banned"]["words"])
@@ -390,7 +407,9 @@ class App:
         self.jobs.progress(job, done=0, total=len(todo))
         if not todo:
             return
-        gen = Generator(self.cfg, self.ledger, client=self.client)
+        # single-image redos use the reserved share of the per-minute limit
+        gen = Generator(self.cfg, self.ledger, client=self.client, gate=self.gate,
+                        priority=job.get("kind") == "重出")
         futs = [self.gen_pool.submit(self._one_slot, gen, sku_id, variant, s, notes.get(s, ""))
                 for s in todo]
         errs = []
@@ -437,7 +456,7 @@ class App:
                                    "Compose the product and hand action vertically to fill this narrow frame. "
                                    "Keep the entire product and important hand action inside the frame; "
                                    "show exactly ONE product container, never duplicate the jar or bottle; "
-                                   "no square inset, no multiple panels, no blank top/bottom bands. ")
+                                   "no square inset, no multiple panels. ")
                         gen.run(GenRequest(prompt=framing + pr, out_path=pp, **common))
                     parts.append(pp)
                 caps = [x.get("caption", "") for x in plan["slots"][str(slot)].get("steps", [])]
@@ -446,68 +465,23 @@ class App:
             write_json(paths["qa"], {"error": "内容审核拦截：" + safe_error(e)[:300], "prompt": prompts})
             raise
         qa = self.check(sku_id, variant, slot, n)
-        layout = self.layout_for(plan["slots"][str(slot)], label)
-        write_json(paths["layout"], layout)
-        self._render(paths, layout, qa)
         qa["prompt"] = prompts
         qa["model"] = model
         qa["sec"] = round(time.time() - t0, 1)
         write_json(paths["qa"], qa)
         st.set_review(sku_id, variant, slot, status="pending", pick=None)
 
-    # ---- copy layer --------------------------------------------------------
+    # ---- added text -------------------------------------------------------
     @staticmethod
-    def layout_for(planned_slot: dict, label: dict) -> dict:
-        """Copy layer from the plan. Confirmed multi-word names are kept on one line."""
-        heading, rows = panel_copy(planned_slot)
-        keep = ingredient_names(label or {}) + [(label or {}).get(k, "") for k in
-                                                ("product_name", "capacity", "pieces_text")]
-        style = "white_panel" if planned_slot.get("copy_layout") == "capacity" else "dark_panel"
-        return make_layout(heading, rows, style=style, keep=keep)
-
-    @staticmethod
-    def _render(paths: dict, layout: dict, qa: dict) -> None:
-        """Render the finished artwork for both photo versions; photos are only read."""
-        qa.pop("layout_error", None)
-        qa["flags"] = [f for f in qa.get("flags", []) if not f.startswith("文案排不下")]
-        for photo, final in (("gen", "gen_final"), ("pasted", "pasted_final")):
-            paths[final].unlink(missing_ok=True)
-        if not has_copy(layout):
-            qa.pop("rendered_copy", None)
-            return
-        try:
-            for photo, final in (("gen", "gen_final"), ("pasted", "pasted_final")):
-                if paths[photo].exists():
-                    render_layout(paths[photo], layout, paths[final])
-            qa["rendered_copy"] = ([layout["heading"]] if layout.get("heading") else []) + layout["rows"]
-        except LayoutOverflow as e:
-            for final in ("gen_final", "pasted_final"):
-                paths[final].unlink(missing_ok=True)
-            qa["layout_error"] = str(e)
-            qa["flags"].append("文案排不下：%s。当前显示的是没加文字的照片，需要调整构图或文案。" % e)
-            qa.pop("rendered_copy", None)
-        qa["level"] = "warn" if qa["flags"] else "ok"
-
-    def rerender(self, sku_id: str, variant: str, slot: int, n: int | None = None) -> dict:
-        """Re-render the copy layer from the current plan. No API call, photos untouched."""
-        st = self.store
-        ns = st.attempts(sku_id, variant, slot)
-        if not ns:
-            raise ValueError("这个图位还没有图。")
-        n = n or ns[-1]
-        paths = st.attempt_paths(sku_id, variant, slot, n)
-        plan, label = st.plan(sku_id, variant), st.label(sku_id) or {}
-        if not paths["layout"].exists() and read_json(paths["qa"], {}).get("rendered_copy"):
-            raise ValueError("这张是旧版生成的图，文字已经印在照片上，不能重新排版；重出一次即可使用新排版。")
-        issues = validate({"slots": {str(slot): plan["slots"][str(slot)]}}, label, self.tpl["banned"]["words"])
-        if issues:
-            raise ValueError("文案有问题，先改好再排版：" + "；".join(issues[:3]))
-        layout = self.layout_for(plan["slots"][str(slot)], label)
-        write_json(paths["layout"], layout)
-        qa = read_json(paths["qa"], {})
-        self._render(paths, layout, qa)
-        write_json(paths["qa"], qa)
-        return qa
+    def expected_text(planned_slot: dict, label: dict) -> dict:
+        """The words the image model was asked to add, for the Q3 check."""
+        if planned_slot.get("steps"):
+            lines = []
+            for k, st in enumerate(planned_slot["steps"], 1):
+                lines += [f"STEP {k}"] + ([st["caption"]] if st.get("caption") else [])
+        else:
+            lines = [t for _r, t in text_lines(planned_slot)]
+        return {"lines": lines, "phrases": unbreakable(lines, label)}
 
     def source_ocr(self, sku_id: str) -> dict | None:
         """OCR of the main product photo, cached: boxes for the label paste, lines for its guard."""
@@ -560,55 +534,38 @@ class App:
             bad = [r["expected"] for r in res if r["sim"] < 0.8]
             if bad:
                 qa["flags"].append("包装大字可能不对：" + " / ".join(bad))
+        # Q3 added text: the model designs it into the image; check spelling and line breaks.
+        want = self.expected_text(plan["slots"][str(slot)], label)
+        if want["lines"] and label_text.available():
+            found = [t for t, _c, _b in label_text.ocr_lines(final)]
+            res = label_text.compare(want["lines"], found)
+            split = [ph for ph in want["phrases"]
+                     if not any(label_text.contains(f, ph) for f in found)]
+            qa["added_text"] = {"lines": res, "split_phrases": split}
+            bad = [r["expected"] for r in res if r["sim"] < 0.9]
+            if bad:
+                qa["flags"].append("加上去的字可能拼错或缺字：" + " / ".join(bad))
+            if split:
+                qa["flags"].append("这些词组可能被拆到两行：" + " / ".join(split))
         qa["level"] = "warn" if qa["flags"] else "ok"
         return qa
 
 
-def compose_steps(parts: list[Path], captions: list[str], out: Path, size: int = 1024) -> None:
-    """Three full-height portrait steps, never a fourth product-reference tile."""
+def compose_steps(parts: list[Path], captions: list[str] | None, out: Path, size: int = 1024) -> None:
+    """Three full-height portrait steps side by side. The step labels and captions are drawn by
+    the image model inside each panel; this only stitches the panels with thin gutters."""
     if len(parts) != 3:
         raise ValueError("A how-to image requires exactly three step photos")
     canvas = Image.new("RGB", (size, size), "white")
-    d = ImageDraw.Draw(canvas, "RGBA")
     gap = 2 * max(1, round(size * 0.004))
-    header = round(size * .08) if len(captions) == 3 and all(c.strip() for c in captions) else 0
     width = (size - gap * 2) // 3
-    boxes = [(k * (width + gap), header, size if k == 2 else k * (width + gap) + width, size)
-             for k in range(3)]
-    if header:
-        d.text((size // 2, header // 2), "HOW TO USE", fill=(28, 44, 55, 255),
-               font=copy_font(round(size * .042)), anchor="mm")
-
-    for tile, (p, (x0, y0, x1, y1)) in enumerate(zip(parts, boxes), 1):
+    boxes = [(k * (width + gap), 0, size if k == 2 else k * (width + gap) + width, size) for k in range(3)]
+    for p, (x0, y0, x1, y1) in zip(parts, boxes):
         with Image.open(p) as src:
             im = ImageOps.exif_transpose(src).convert("RGBA")
             bg = Image.new("RGBA", im.size, "white")
             bg.alpha_composite(im)
             im = ImageOps.fit(bg.convert("RGB"), (x1 - x0, y1 - y0), Image.Resampling.LANCZOS)
         canvas.paste(im, (x0 + (x1 - x0 - im.width) // 2, y0 + (y1 - y0 - im.height) // 2))
-        pad = max(8, round(size * 0.02))
-        radius = max(14, round(size * 0.025))
-        cx, cy = x0 + pad + radius, y0 + pad + radius
-        d.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill=(255, 255, 255, 238))
-        d.text((cx, cy), str(tile), fill=(28, 44, 55, 255), font=copy_font(round(size * 0.03)), anchor="mm")
-        cap = captions[tile - 1].strip() if tile - 1 < len(captions) else ""
-        if not cap:
-            continue
-        # Measure the confirmed copy and wrap before reducing its font size.
-        # Words and phrases are never cut; below the smallest readable size the step fails.
-        block = None
-        for fs in range(max(12, round(size * 0.026)), max(9, round(size * 0.012)) - 1, -1):
-            try:
-                candidate = copy_block(cap, fs, x1 - x0 - pad * 2)
-            except LayoutOverflow:
-                continue
-            if candidate.height <= (y1 - y0) * 0.30:
-                block = candidate
-                break
-        if block is None:
-            raise LayoutOverflow(f"第 {tile} 步说明“{cap}”在窄格里排不下，需要缩短说明")
-        height = block.height + pad
-        d.rectangle((x0, y1 - height, x1, y1), fill=(16, 28, 39, 200))
-        block.draw(d, x0 + pad, y1 - height + pad // 2, "white")
     out.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(out)

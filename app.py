@@ -36,6 +36,28 @@ CATS = ["serum", "cream", "mask", "cleanser", "toner", "lip", "eye", "body", "ot
 SIZE_CN = {"big": "大", "medium": "中", "small": "小"}
 
 WEB = Path(__file__).resolve().parent / "web"
+APP_VERSION = "1.6.0"
+
+
+def build_id() -> str:
+    """Version shown in the app: release number + the commit the code came from."""
+    root = Path(__file__).resolve().parent
+    sha = ""
+    try:
+        head = (root / ".git" / "HEAD").read_text().strip()
+        if head.startswith("ref: "):
+            name = head[5:]
+            ref = root / ".git" / name
+            if ref.exists():
+                sha = ref.read_text().strip()[:7]
+            else:                                   # packed refs
+                packed = (root / ".git" / "packed-refs").read_text().splitlines()
+                sha = next((ln.split()[0][:7] for ln in packed if ln.endswith(" " + name)), "")
+        else:
+            sha = head[:7]
+    except OSError:
+        sha = (root / ".app-version").read_text().strip()[:7] if (root / ".app-version").exists() else ""
+    return f"v{APP_VERSION}" + (f" · {sha}" if sha else "")
 LOCAL_CLIPS = ("window", "box", "sand", "silk")
 
 
@@ -59,7 +81,12 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     app.mount("/static", StaticFiles(directory=WEB / "static"), name="static")
 
-    @app.get("/", response_class=HTMLResponse)
+    @app.get("/")
+    def home():
+        """The workbench is the home page; the old showcase page stays at /showcase."""
+        return RedirectResponse("/library", status_code=307)
+
+    @app.get("/showcase", response_class=HTMLResponse)
     def landing():
         local_clips = " ".join(k for k in LOCAL_CLIPS if (ws / "landing-media" / f"{k}-tight.mp4").is_file())
         return HTMLResponse((WEB / "landing.html").read_text(encoding="utf-8").replace("{{LOCAL_CLIPS}}", local_clips))
@@ -681,8 +708,6 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         compare = E("showBig(" + json.dumps(urls) + "," + json.dumps(caps, ensure_ascii=False) + ")")
         disabled = " disabled" if redo else ""
         tog = f'<button data-review-control{disabled} onclick="act(this,\'toggle\')" title="L">{"改用生成原图" if which == "回贴版" else "改用回贴版"}</button>' if cur["pasted"] else ""
-        relayout = (f'<button data-review-control{disabled} onclick="act(this,\'relayout\')" title="按计划里的文案重新排版，不重新出图、不花钱">重新排版</button>'
-                    if cur.get("layout") else "")
         return (
             f'<article class="cell {cls}" tabindex="0" data-sku="{E(sid)}" data-v="{v}" data-slot="{slot}" data-version="{E(cur["version"])}"{redo_data}>'
             f'<button type="button" class="review-photo" onclick="{compare}" aria-label="对照原图：{E(tpl_names.get(slot))}">'
@@ -691,9 +716,9 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             f'<p class="mute">第 {cur["attempts"]} 版 · {which}</p>'
             + "".join(f'<div class="f">{E(x)}</div>' for x in flags) +
             f'<div class="row review-controls"><button data-review-control{disabled} onclick="act(this,\'approve\')" title="A">通过</button>'
-            f'<button data-review-control{disabled} onclick="act(this,\'redo\')" title="R">重出</button>{tog}{relayout}</div>'
+            f'<button data-review-control{disabled} onclick="act(this,\'redo\')" title="R">重出</button>{tog}</div>'
             '<form class="redo-editor" hidden><label>调整说明（选填）'
-            '<textarea name="note" placeholder="例如：包装正面朝向镜头"></textarea></label>'
+            '<textarea name="note" placeholder="例如：标题换成更大的字；包装正面朝向镜头"></textarea></label>'
             '<div class="row"><button type="button" onclick="closeRedo(this)">取消</button>'
             '<button class="p">确认重出</button></div></form>'
             f'<div class="review-feedback mute" role="status">{"正在生成" if redo else ""}</div>'
@@ -746,7 +771,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         d = await request.json()
         sid, v, slot, action = d["sku"], d["variant"], int(d["slot"]), d["action"]
         st = core.store
-        if action in {"approve", "toggle", "relayout"} and core.jobs.redo_for(sid, v, slot):
+        if action in {"approve", "toggle"} and core.jobs.redo_for(sid, v, slot):
             return JSONResponse({"error": "这个图位正在重出，请等新图完成后审核。"})
         if action == "approve":
             st.set_review(sid, v, slot, status="approved")
@@ -754,11 +779,6 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             cur = st.current(sid, v, slot)
             pick = "gen" if cur and cur["file"] == cur["pasted"] else "pasted"
             st.set_review(sid, v, slot, pick=pick)
-        elif action == "relayout":
-            try:
-                core.rerender(sid, v, slot)
-            except ValueError as e:
-                return JSONResponse({"error": str(e)})
         elif action == "redo":
             n = len(st.attempts(sid, v, slot))
             if n >= int(core.cfg.get("repair", {}).get("max_attempts_per_slot", 3)) + 3:
@@ -798,7 +818,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     @app.get("/api/jobs")
     def api_jobs(sku: str = ""):
         js = [j for j in core.jobs.recent() if not sku or j["sku"] == sku]
-        return JSONResponse([{k: j.get(k) for k in ("id", "kind", "sku", "variant", "slot", "total", "done", "state", "error")}
+        return JSONResponse([{k: j.get(k) for k in ("id", "kind", "sku", "variant", "slot", "total", "done", "state", "error", "phase")}
                              for j in js])
 
     @app.get("/api/slot")
@@ -891,7 +911,9 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 <p><label><input type="checkbox" name="demo_mode" {'checked' if c.get('demo_mode') else ''}> 演示模式</label> <span class="mute">{mode_copy}</span></p></div>
 <div class="cols2"><section class="card settings-section"><h2>出图与预算</h2>
 <p>每日预算（美元）<input type="number" step="0.5" name="budget" value="{E(c['budget_usd_per_day'])}"></p>
-<p>并发（同时出几张）<input type="number" name="concurrency" value="{E(c.get('concurrency', 6))}"></p>
+<p>账号每分钟出图上限（IPM）<input type="number" name="ipm" value="{E((c.get('throughput') or {}).get('images_per_minute', 150))}"></p>
+<p class="mute">在 OpenAI 后台 Settings → Limits → Image 里「gpt-image」那一行的数字。整套出图最多用到 80%，其余留给单张重出。</p>
+<p>最多同时生成几套<input type="number" name="max_sets" min="1" max="15" value="{E((c.get('throughput') or {}).get('max_parallel_sets', 10))}"></p>
 <p>画质 <select name="quality">{''.join(f'<option {"selected" if g["quality"] == q else ""}>{q}</option>' for q in ("low", "medium", "high"))}</select></p>
 </section><section class="card settings-section"><h2>场景规则</h2>
 <p><label><input type="checkbox" name="faces_all" {'checked' if f.get('allow_full_face') else ''}> 所有类目都允许出现完整人脸</label></p>
@@ -913,6 +935,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 <section class="card settings-section" style="margin-top:18px"><h2>副图文案规则</h2>
 <p>卖点 02、成分或材质 03、质地 04、用法 05、场景 06、规格 07 按商品资料分配文案。系统使用勾选采用的英文短句排版。</p>
 <p>到商品页「商品资料与卖点」粘贴资料。每条建议附有原文依据和对应图位，用法和容量缺资料时会跳过。</p></section>"""
+        body += f'<p class="mute">当前版本：{E(build_id())}</p>'
         return page("设置", body)
 
     @app.post("/settings/openai-key")
@@ -947,7 +970,10 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         num = lambda k, d: float(f.get(k) or d)  # noqa: E731
         cur["demo_mode"] = bool(f.get("demo_mode"))
         cur["budget_usd_per_day"] = num("budget", 10)
-        cur["concurrency"] = int(num("concurrency", 6))
+        th = cur.setdefault("throughput", {})
+        th["images_per_minute"] = int(num("ipm", 150))
+        th["max_parallel_sets"] = max(1, min(15, int(num("max_sets", 10))))
+        th.setdefault("use_ratio", 0.8)
         g = cur.setdefault("generation", {})
         g["model"] = str(f.get("model") or g.get("model")).strip()
         g["quality"] = str(f.get("quality") or "medium")

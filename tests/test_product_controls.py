@@ -57,7 +57,7 @@ def test_long_label_uses_collapsible_scroll_regions(tmp_path):
 
 
 def test_saved_plan_rechecks_long_approved_copy_and_wraps_it(tmp_path):
-    from imggen.copy_layout import compose_copy_panel, copy_font, wrap_copy
+    from imggen.copy_layout import copy_font, wrap_copy
     from imggen.plan import validate
 
     app, client, sid = setup_product(tmp_path)
@@ -85,10 +85,3 @@ def test_saved_plan_rechecks_long_approved_copy_and_wraps_it(tmp_path):
     assert len(lines) > 1 and " ".join(lines) == heading
     assert all(font.getlength(line) <= 928 for line in lines)
 
-    sample = tmp_path / "layout.png"
-    Image.new("RGB", (1024, 1024), "#ead6c2").save(sample)
-    compose_copy_panel(sample, heading, [ingredient])
-    with Image.open(sample) as im:
-        assert im.size == (1024, 1024)
-        assert im.getpixel((0, 0)) == (234, 214, 194)
-        assert im.getpixel((0, 1023)) != im.getpixel((0, 0))

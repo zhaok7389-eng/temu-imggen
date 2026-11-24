@@ -15,13 +15,15 @@ PKG_TEMPLATES = Path(__file__).resolve().parent / "templates"
 
 
 def load_templates(workspace: str | Path) -> dict:
-    """workspace/templates/*.yaml override the defaults shipped with the code."""
+    """workspace/templates/*.yaml override the defaults shipped with the code, key by key:
+    a user copy that predates a new key (text_block, ...) still gets the default for it."""
     out = {}
     for name in ("slots", "banned"):
+        data = yaml.safe_load((PKG_TEMPLATES / f"{name}.yaml").read_text(encoding="utf-8")) or {}
         p = Path(workspace) / "templates" / f"{name}.yaml"
-        if not p.exists():
-            p = PKG_TEMPLATES / f"{name}.yaml"
-        out[name] = yaml.safe_load(p.read_text(encoding="utf-8"))
+        if p.exists():
+            data.update(yaml.safe_load(p.read_text(encoding="utf-8")) or {})
+        out[name] = data
     return out
 
 
@@ -192,32 +194,75 @@ def _fmt(tpl: str, **kw) -> str:
     return re.sub(r"\{(\w+)\}", lambda m: str(kw.get(m.group(1), "")), tpl)
 
 
+def keep_phrases(label: dict) -> list[str]:
+    """Confirmed multi-word names that must stay on one line (ingredients, product name, capacity)."""
+    names = ingredient_names(label or {}) + [(label or {}).get(k, "") for k in
+                                             ("product_name", "capacity", "pieces_text")]
+    return [n for n in dict.fromkeys(names) if n and len(n.split()) > 1]
+
+
+def text_lines(slot: dict) -> list[tuple[str, str]]:
+    """The added text of one slot as (role, text). Only confirmed copy (C4)."""
+    heading, rows = panel_copy(slot)
+    out = [("headline", heading)] if heading else []
+    role = "ingredient name" if slot.get("copy_layout") == "ingredients" else "point"
+    if slot.get("copy_layout") in {"texture", "scene", "capacity"}:
+        out = [("caption", heading)] if heading else []
+    out += [(role, r) for r in rows if r and r.strip()]
+    return out
+
+
+def unbreakable(texts: list[str], label: dict) -> list[str]:
+    from .copy_layout import phrase_units
+    keep = keep_phrases(label)
+    units = [u for t in texts for u in phrase_units(t, keep) if len(u.split()) > 1]
+    return list(dict.fromkeys(units))
+
+
+def text_block(lines: list[tuple[str, str]], label: dict, tpl_slots: dict) -> str:
+    """Exact words the image model must design into the image, and the phrases it may not split."""
+    if not lines:
+        return ""
+    body = "\n" + "\n".join(f'- {role.capitalize()}: "{text}"' for role, text in lines)
+    out = _fmt(tpl_slots.get("text_block", "Add exactly this text:\n{lines}"), lines=body).strip()
+    phrases = unbreakable([t for _r, t in lines], label)
+    if phrases:
+        out += "\n" + _fmt(tpl_slots.get("text_phrases", "Keep together: {phrases}."),
+                           phrases=", ".join(f'"{x}"' for x in phrases)).strip()
+    return out
+
+
 def prompts_for_slot(slot_id: int, plan: dict, label: dict, tpl: dict, faces: bool,
                      fix_note: str = "") -> list[str]:
-    """Image prompt(s) for one slot. The how-to slot returns one prompt per step."""
-    t = next(x for x in tpl["slots"]["slots"] if int(x["id"]) == slot_id)
+    """Image prompt(s) for one slot. The how-to slot returns one prompt per step.
+
+    Text is designed into the image by the image model (decision 2026-11-24): the prompt
+    lists the exact confirmed words and which phrases must not be split across lines.
+    """
+    tslots = tpl["slots"]
+    t = next(x for x in tslots["slots"] if int(x["id"]) == slot_id)
     s = plan["slots"][str(slot_id)]
-    people = tpl["slots"]["faces_ok"] if faces else tpl["slots"]["no_faces"]
-    common = dict(style=style_text(plan.get("style", {})), headline=s.get("headline", ""),
+    people = tslots["faces_ok"] if faces else tslots["no_faces"]
+    style = plan.get("style", {})
+    if s.get("copy_layout") == "ingredients":
+        style = {k: v for k, v in style.items() if k != "props"}
+    common = dict(style=style_text(style), headline=s.get("headline", ""),
                   bullets=" / ".join(f'"{b}"' for b in s.get("bullets", [])),
                   capacity=s.get("capacity", ""), scene=s.get("scene", ""), people=people,
                   ingredients=", ".join(s.get("ingredient_labels", [])))
-    tail = "\n\n" + tpl["slots"]["fidelity"] + " " + (people if slot_id == 6 else tpl["slots"]["no_faces"])
+    tail = "\n\n" + tslots["fidelity"] + " " + (people if slot_id == 6 else tslots["no_faces"])
     lb = label_block(label)
     if lb:
         tail += "\n\n" + lb
     if fix_note:
         tail += "\n\nThe previous attempt was rejected. Fix this: " + fix_note
     if t.get("copy") == "steps":
-        return [" ".join(_fmt(t["step_prompt"], step_no=k + 1, action=st["action"], **common).split()) + tail
-                for k, st in enumerate(s.get("steps", []))]
-    if s.get("copy_layout"):
-        if s["copy_layout"] == "ingredients":
-            common["style"] = style_text({k: v for k, v in plan.get("style", {}).items() if k != "props"})
-        photo = " ".join(_fmt(t.get("photo_prompt", t["prompt"]), **common).split())
-        if any(panel_copy(s)):
-            photo += " Keep every important object within the central 72 percent of the image height."
-        # The renderer, not the image model, puts approved copy on the finished artwork.
-        return [photo + tail + "\n\nNo added text, symbols, badges, captions, headlines, "
-                "or lettering outside the original packaging. The workbench adds approved copy later."]
-    return [" ".join(_fmt(t["prompt"], **common).split()) + tail]
+        out = []
+        for k, st in enumerate(s.get("steps", []), 1):
+            lines = [("step label", f"STEP {k}")] + ([("caption", st["caption"])] if st.get("caption") else [])
+            body = " ".join(_fmt(t["step_prompt"], step_no=k, action=st["action"], **common).split())
+            out.append(body + "\n\n" + text_block(lines, label, tslots) + tail)
+        return out
+    body = " ".join(_fmt(t["prompt"], **common).split())
+    block = text_block(text_lines(s), label, tslots)
+    return [body + ("\n\n" + block if block else "") + tail]

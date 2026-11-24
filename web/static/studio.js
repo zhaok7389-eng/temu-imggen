@@ -130,7 +130,7 @@ async function pollJobs(sku) {
       }
       const visible = review ? running.filter(job => job.kind !== '重出') : running;
       const entries = visible.slice(0, 3).map(job => ({
-        title: jobActions[job.kind] || '正在处理',
+        title: job.phase === 'queued' ? '排队等待开始（同时生成的套数已满）' : (jobActions[job.kind] || '正在处理'),
         detail: [!sku && job.sku, job.variant && '变体 ' + job.variant,
           job.slot && '图位 ' + String(job.slot).padStart(2, '0')].filter(Boolean).join(' · '),
         done: job.done,
@@ -261,10 +261,6 @@ function closeRedo(button) {
 function act(element, action) {
   const card = element.closest('.cell');
   if (card.dataset.redoId || card.dataset.submitting) return;
-  if (action === 'relayout') {
-    submitReview(card, 'relayout');
-    return;
-  }
   if (action === 'redo') {
     const editor = card.querySelector('.redo-editor');
     editor.hidden = false;
@@ -279,7 +275,6 @@ async function submitReview(card, action, note = '') {
   if (data.redoId || data.submitting) return;
   data.submitting = '1';
   if (action === 'redo') redoFeedback(card, '正在提交重出', 'running');
-  if (action === 'relayout') redoFeedback(card, '正在重新排版', 'running');
   try {
     const result = await post('/api/review', {
       sku: data.sku, variant: data.v, slot: +data.slot, action, note

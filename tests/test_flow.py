@@ -79,10 +79,14 @@ def test_full_flow_demo(tmp_path):
     st = app.state.core.store
     for slot in range(1, 9):
         assert st.current(sku, "A", slot) is not None, slot
-    assert st.current(sku, "A", 2)["qa"]["rendered_copy"] == [
-        "Turmeric Serum", "Moisturizing", "Smooth Skin", "Even Skin Tone"]
-    assert st.current(sku, "A", 3)["qa"]["rendered_copy"] == ["KEY INGREDIENTS", "Turmeric"]
-    assert st.current(sku, "A", 4)["qa"]["rendered_copy"] == ["Lightweight serum texture"]
+    # the image model designs the confirmed copy into the picture (no program-drawn strip)
+    p2 = st.current(sku, "A", 2)["qa"]["prompt"][0]
+    for words in ("Turmeric Serum", "Moisturizing", "Smooth Skin", "Even Skin Tone"):
+        assert f'"{words}"' in p2
+    p3 = st.current(sku, "A", 3)["qa"]["prompt"][0]
+    assert '"KEY INGREDIENTS"' in p3 and '"Turmeric"' in p3
+    assert '"Lightweight serum texture"' in st.current(sku, "A", 4)["qa"]["prompt"][0]
+    assert not list(st.vdir(sku, "A").glob("attempts/*.final.png"))
     assert st.attempts(sku, "A", 5) == [1]          # how-to composed from 3 step images
     assert (st.vdir(sku, "A") / "attempts" / "5_1_step3.png").exists()
 
@@ -143,8 +147,12 @@ def test_copy_plan_without_verified_details_never_invents_claims_or_use(tmp_path
     assert plan["slots"]["5"]["skip"] and plan["slots"]["7"]["skip"]
     assert validate(plan, label, []) == []
     prompt, = prompts_for_slot(2, plan, label, tpl, False)
-    assert "No added text" in prompt
-    assert "Coffee Sea Salt Scrub" not in prompt
+    assert 'Headline: "Coffee Sea Salt Scrub"' in prompt         # only the confirmed name, no claims
+    assert "Point:" not in prompt
+    assert "Coffee Sea Salt Scrub" in prompt.split("keep each of these phrases together")[1]
+    ing, = prompts_for_slot(3, plan, label, tpl, False)
+    assert '"KEY INGREDIENTS"' in ing and 'Ingredient name: "Sea Salt"' in ing
+    assert "central 72 percent" not in ing
 
 
 def test_upload_grouping(tmp_path):
